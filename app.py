@@ -13,6 +13,7 @@ from fastapi.templating import Jinja2Templates
 
 from device import DeviceManager
 from vision import list_templates, save_template, crop_from_screenshot
+import json as jsonlib
 from engine import load_all_tasks, load_task, save_task, delete_task, run_task, TASKS_DIR
 
 ROOT = Path(__file__).parent
@@ -137,12 +138,15 @@ async def stop_task():
 @app.get("/tasks/{filename}/edit", response_class=HTMLResponse)
 async def edit_task(request: Request, filename: str):
     task = load_task(TASKS_DIR / filename)
+    steps_json = jsonlib.dumps([s.to_dict() for s in task.steps])
     return views.TemplateResponse("task_editor.html", {
         "request": request,
         "task": task,
         "filename": filename,
         "templates": list_templates(),
+        "task_files": [p.name for p in sorted(TASKS_DIR.glob("*.yaml"))],
         "is_new": False,
+        "steps_json": steps_json,
     })
 
 
@@ -153,6 +157,7 @@ async def new_task(request: Request):
         "task": None,
         "filename": "",
         "templates": list_templates(),
+        "task_files": [p.name for p in sorted(TASKS_DIR.glob("*.yaml"))],
         "is_new": True,
     })
 
@@ -198,7 +203,7 @@ async def take_screenshot():
     if not dev:
         return JSONResponse({"status": "error", "message": "No device"}, status_code=400)
     try:
-        png = dev.screencap()
+        png = dev.screencap_png()
         b64 = base64.b64encode(png).decode()
         return JSONResponse({"status": "ok", "image": b64, "size": len(png)})
     except Exception as e:

@@ -1,39 +1,66 @@
 name: Claim Daily Rewards
 description: Collects login rewards, VIP chest, and daily quest rewards
 icon: gift
-
 steps:
+- action: if_found
+  description: ''
+  template: tab-exit_button.png
+  then:
+  - action: tap_back
+    description: ''
+  else: []
+- action: if_found
+  description: ''
+  template: quest_button.png
+  ignore_badge: true
+  then:
   - action: find_and_tap
-    template: daily_reward_popup.png
-    description: Tap daily reward popup if visible
+    description: ''
+    template: quest_button.png
     optional: true
-
+    ignore_badge: true
   - action: wait
-    seconds: 1
-
-  - action: find_and_tap
-    template: claim_btn.png
-    description: Tap claim button
-    optional: true
-
-  - action: wait
+    description: ''
     seconds: 2
-
-  - action: tap_back
-    description: Close reward screen
-
   - action: find_and_tap
-    template: vip_chest_icon.png
-    description: Open VIP chest
-    optional: true
-
-  - action: find_and_tap
-    template: claim_free_btn.png
-    description: Claim free VIP chest
-    optional: true
-
-  - action: wait
-    seconds: 1
-
-  - action: tap_back
-    description: Return to main screen
+    description: ''
+    template: claim-all_button.png
+  - action: if_found
+    description: ''
+    template: tab-exit_button.png
+    then:
+    - action: find_and_tap
+      description: ''
+      template: tab-exit_button.png
+    else: []
+  else: []
+- action: find_and_tap
+  description: Tap daily quest reward
+  template: quest_button.png
+  optional: true
+  ignore_badge: true
+- action: wait
+  description: ''
+  seconds: 1
+- action: find_and_tap
+  description: Tap claim button
+  template: ''
+  optional: true
+- action: wait
+  description: ''
+  seconds: 2
+- action: tap_back
+  description: Close reward screen
+- action: find_and_tap
+  description: Open VIP chest
+  template: ''
+  optional: true
+- action: find_and_tap
+  description: Claim free VIP chest
+  template: ''
+  optional: true
+- action: wait
+  description: ''
+  seconds: 1
+- action: tap_back
+  description: Return to main screen

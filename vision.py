@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+from functools import lru_cache
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -27,22 +28,38 @@ def screenshot_to_cv(png_bytes: bytes) -> np.ndarray:
     return img
 
 
+@lru_cache(maxsize=64)
+def _load_template(path: str, mtime_ns: int) -> np.ndarray:
+    img = cv2.imread(path, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError(f"Failed to load template: {path}")
+    return img
+
+
+def _get_template(tpl_path: Path) -> np.ndarray:
+    if not tpl_path.exists():
+        raise FileNotFoundError(f"Template not found: {tpl_path}")
+    mtime = tpl_path.stat().st_mtime_ns
+    return _load_template(str(tpl_path), mtime)
+
+
 def find_template(
     screenshot: np.ndarray | bytes,
     template_name: str,
     confidence: float = 0.8,
     templates_dir: Path = TEMPLATES_DIR,
+    ignore_badge: bool = False,
 ) -> MatchResult | None:
     if isinstance(screenshot, bytes):
         screenshot = screenshot_to_cv(screenshot)
 
-    tpl_path = templates_dir / template_name
-    if not tpl_path.exists():
-        raise FileNotFoundError(f"Template not found: {tpl_path}")
+    template = _get_template(templates_dir / template_name)
+    orig_th, orig_tw = template.shape[:2]
 
-    template = cv2.imread(str(tpl_path), cv2.IMREAD_COLOR)
-    if template is None:
-        raise ValueError(f"Failed to load template: {tpl_path}")
+    if ignore_badge:
+        crop_h = int(orig_th * 0.65)
+        crop_w = int(orig_tw * 0.65)
+        template = template[orig_th - crop_h:orig_th, 0:crop_w].copy()
 
     th, tw = template.shape[:2]
     sh, sw = screenshot.shape[:2]
@@ -56,6 +73,12 @@ def find_template(
     _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
     if max_val >= confidence:
+        if ignore_badge:
+            return MatchResult(
+                x=max_loc[0], y=max_loc[1] - (orig_th - crop_h),
+                w=orig_tw, h=orig_th,
+                confidence=round(max_val, 4),
+            )
         return MatchResult(
             x=max_loc[0], y=max_loc[1],
             w=tw, h=th,
@@ -74,11 +97,7 @@ def find_all_templates(
     if isinstance(screenshot, bytes):
         screenshot = screenshot_to_cv(screenshot)
 
-    tpl_path = templates_dir / template_name
-    template = cv2.imread(str(tpl_path), cv2.IMREAD_COLOR)
-    if template is None:
-        raise ValueError(f"Failed to load template: {tpl_path}")
-
+    template = _get_template(templates_dir / template_name)
     th, tw = template.shape[:2]
     result = cv2.matchTemplate(screenshot, template, cv2.TM_CCOEFF_NORMED)
 
@@ -105,6 +124,7 @@ def save_template(name: str, image_bytes: bytes, templates_dir: Path = TEMPLATES
     templates_dir.mkdir(parents=True, exist_ok=True)
     p = templates_dir / name
     p.write_bytes(image_bytes)
+    _load_template.cache_clear()
     return p
 
 

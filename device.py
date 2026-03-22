@@ -6,15 +6,26 @@ import ctypes.wintypes
 from pathlib import Path
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
-from io import BytesIO
 
 import numpy as np
+import cv2
 
 ADB_PATH = shutil.which("adb") or r"C:\Users\xalch\AppData\Local\Android\Sdk\platform-tools\adb.exe"
 GPG_PORT = 6520
 
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
+
+
+class BITMAPINFOHEADER(ctypes.Structure):
+    _fields_ = [
+        ("biSize", ctypes.c_uint32), ("biWidth", ctypes.c_int32),
+        ("biHeight", ctypes.c_int32), ("biPlanes", ctypes.c_uint16),
+        ("biBitCount", ctypes.c_uint16), ("biCompression", ctypes.c_uint32),
+        ("biSizeImage", ctypes.c_uint32), ("biXPelsPerMeter", ctypes.c_int32),
+        ("biYPelsPerMeter", ctypes.c_int32), ("biClrUsed", ctypes.c_uint32),
+        ("biClrImportant", ctypes.c_uint32),
+    ]
 
 
 @dataclass
@@ -27,8 +38,13 @@ class DeviceInfo:
 
 class BaseDevice(ABC):
     @abstractmethod
-    def screencap(self) -> bytes:
+    def screencap(self) -> np.ndarray:
         ...
+
+    def screencap_png(self) -> bytes:
+        img = self.screencap()
+        _, buf = cv2.imencode(".png", img)
+        return buf.tobytes()
 
     @abstractmethod
     def tap(self, x: int, y: int):
@@ -84,7 +100,7 @@ class WindowDevice(BaseDevice):
         ctypes.windll.user32.ClientToScreen(hwnd, ctypes.byref(pt))
         return pt.x, pt.y, rect.right, rect.bottom
 
-    def screencap(self) -> bytes:
+    def screencap(self) -> np.ndarray:
         hwnd = self._find_window()
         cx, cy, w, h = self._get_client_rect(hwnd)
 
@@ -92,18 +108,7 @@ class WindowDevice(BaseDevice):
         hdc_mem = gdi32.CreateCompatibleDC(hdc_screen)
         hbmp = gdi32.CreateCompatibleBitmap(hdc_screen, w, h)
         gdi32.SelectObject(hdc_mem, hbmp)
-
         gdi32.BitBlt(hdc_mem, 0, 0, w, h, hdc_screen, cx, cy, 0x00CC0020)
-
-        class BITMAPINFOHEADER(ctypes.Structure):
-            _fields_ = [
-                ("biSize", ctypes.c_uint32), ("biWidth", ctypes.c_int32),
-                ("biHeight", ctypes.c_int32), ("biPlanes", ctypes.c_uint16),
-                ("biBitCount", ctypes.c_uint16), ("biCompression", ctypes.c_uint32),
-                ("biSizeImage", ctypes.c_uint32), ("biXPelsPerMeter", ctypes.c_int32),
-                ("biYPelsPerMeter", ctypes.c_int32), ("biClrUsed", ctypes.c_uint32),
-                ("biClrImportant", ctypes.c_uint32),
-            ]
 
         bmi = BITMAPINFOHEADER()
         bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
@@ -113,19 +118,15 @@ class WindowDevice(BaseDevice):
         bmi.biBitCount = 32
         bmi.biCompression = 0
 
-        buf_size = w * h * 4
-        buf = ctypes.create_string_buffer(buf_size)
+        buf = ctypes.create_string_buffer(w * h * 4)
         gdi32.GetDIBits(hdc_mem, hbmp, 0, h, buf, ctypes.byref(bmi), 0)
 
         gdi32.DeleteObject(hbmp)
         gdi32.DeleteDC(hdc_mem)
         user32.ReleaseDC(0, hdc_screen)
 
-        import cv2
         arr = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4)
-        bgr = arr[:, :, :3].copy()
-        _, png = cv2.imencode(".png", bgr)
-        return png.tobytes()
+        return arr[:, :, :3].copy()
 
     def tap(self, x: int, y: int):
         hwnd = self._find_window()
@@ -182,8 +183,13 @@ class ADBDevice(BaseDevice):
             raise RuntimeError(f"adb error: {r.stderr.decode(errors='replace')}")
         return r.stdout if raw else r.stdout.decode(errors="replace")
 
-    def screencap(self) -> bytes:
-        return self._run(["exec-out", "screencap", "-p"], raw=True)
+    def screencap(self) -> np.ndarray:
+        raw = self._run(["exec-out", "screencap", "-p"], raw=True)
+        arr = np.frombuffer(raw, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            raise RuntimeError("Failed to decode ADB screenshot")
+        return img
 
     def tap(self, x: int, y: int):
         self._run(["shell", "input", "tap", str(x), str(y)])
