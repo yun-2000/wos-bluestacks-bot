@@ -1,51 +1,55 @@
 # WOS Bot
 
-Personal automation bot for Whiteout Survival. Runs on Windows with Google Play Games or on Android devices via ADB.
+Visual automation bot for **Whiteout Survival** with a task builder GUI.
+
+Build custom automation tasks using a drag-and-drop step editor, template matching with OpenCV, and a live execution log — no coding required.
 
 ## Features
 
-- **Visual automation** — OpenCV template matching to find and tap UI elements
-- **YAML task scripting** — Define automation sequences as simple YAML files
-- **Web dashboard** — Create, edit, run, and monitor tasks from a browser
-- **Template manager** — Capture screenshots and crop UI elements for matching
-- **Dual device support** — Window capture (Google Play Games) or ADB (Android phone)
-- **Real-time logs** — WebSocket-powered execution log with color-coded levels
+- **Window Capture** — Works directly with Google Play Games on PC (no ADB/root needed)
+- **ADB Support** — Also works with Android phones over ADB
+- **Task Builder GUI** — Create, edit, and reorder automation steps visually
+- **Template Matching** — Screenshot cropping tool to capture UI elements as templates
+- **Smart Matching** — Ignore notification badges, adjustable confidence threshold
+- **Conditional Logic** — `if_found` / `else` branching, `loop`, `loop_until_found`, `loop_templates`
+- **Sub-tasks** — Run reusable task files from within other tasks
+- **Live Log** — WebSocket-powered real-time execution log
 
-## Requirements
-
-- Python 3.11+
-- Google Play Games (Windows) with Whiteout Survival running, **or** an Android device with ADB
-- OpenCV (`opencv-python`)
-
-## Setup
+## Quick Start
 
 ```bash
-git clone <repo-url> && cd WOS
+git clone https://github.com/austxio/WOS-Bot.git && cd WOS-Bot
 pip install -r requirements.txt
 pip install pyautogui pygetwindow
-```
-
-## Usage
-
-### 1. Start the server
-
-```bash
 python app.py
 ```
 
-Open **http://localhost:8000** in a browser.
+Open **http://localhost:8000** in your browser.
 
-### 2. Connect a device
+## How It Works
 
-The bot auto-detects a visible "Whiteout Survival" window. For ADB devices, click **Connect GPG** or plug in a phone with USB debugging enabled.
+1. **Connect** — Open Whiteout Survival in Google Play Games (auto-detected) or connect an Android device via ADB
+2. **Capture Templates** — Go to Templates tab, take a screenshot, crop buttons/icons you want the bot to find
+3. **Build Tasks** — Create tasks with steps like `find_and_tap`, `wait`, `if_found`, `loop_templates`
+4. **Run** — Hit ▶ Run and watch the execution log
 
-### 3. Create templates
+## Task Actions
 
-Go to **Templates** tab → **Capture Screenshot** → draw a box around the UI element → name it → **Save Crop**.
-
-### 4. Create / run tasks
-
-Go to **Tasks** tab → **+ New Task** → add steps using the visual editor → **Save**. Hit **Run** on the dashboard.
+| Action | Description |
+|--------|-------------|
+| `find_and_tap` | Find template on screen and tap it |
+| `tap` | Tap fixed coordinates |
+| `wait` | Wait N seconds |
+| `tap_back` | Press back / ESC |
+| `tap_dismiss` | Press back to dismiss popups |
+| `swipe` | Swipe gesture |
+| `if_found` | Branch: if template found → THEN steps, else → ELSE steps |
+| `run_task` | Execute another task file as sub-task |
+| `loop` | Repeat steps N times or until stopped |
+| `loop_until_found` | Keep checking until template appears |
+| `loop_templates` | Cycle through multiple templates, tap any found |
+| `verify` | Assert template is visible |
+| `screenshot` | Save debug screenshot |
 
 ## Task YAML Format
 
@@ -54,52 +58,31 @@ name: Claim Daily Rewards
 description: Collects login rewards
 icon: "🎁"
 steps:
+  - action: tap_dismiss
+
   - action: find_and_tap
     template: daily_reward_popup.png
     optional: true
-    confidence: 0.8
-    retries: 3
+    ignore_badge: true
 
-  - action: wait
-    seconds: 2
+  - action: if_found
+    template: close_button.png
+    then:
+      - action: find_and_tap
+        template: close_button.png
+    else:
+      - action: tap_back
 
-  - action: tap
-    x: 400
-    y: 600
+  - action: loop_templates
+    templates:
+      - claim_button.png
+      - collect_button.png
+    max_loops: 5
+    loop_delay: 1
 
-  - action: swipe
-    x1: 300
-    y1: 800
-    x2: 300
-    y2: 400
-    duration_ms: 500
-
-  - action: tap_back
-
-  - action: verify
-    template: home_screen.png
-    timeout: 10
-
-  - action: screenshot
-    filename: debug.png
-
-  - action: repeat
-    count: 2
-    times: 3
+  - action: run_task
+    task_file: go_home.yaml
 ```
-
-### Step actions
-
-| Action | Description | Key fields |
-|--------|-------------|------------|
-| `find_and_tap` | Find template on screen, tap its center | `template`, `confidence`, `optional`, `retries` |
-| `tap` | Tap fixed coordinates | `x`, `y` |
-| `swipe` | Swipe between two points | `x1`, `y1`, `x2`, `y2`, `duration_ms` |
-| `wait` | Pause execution | `seconds` |
-| `tap_back` | Press back / ESC | — |
-| `screenshot` | Save current screen | `filename` |
-| `verify` | Assert template is visible | `template`, `timeout` |
-| `repeat` | Repeat previous N steps | `count`, `times` |
 
 ## API Endpoints
 
@@ -123,12 +106,11 @@ steps:
 ## Project Structure
 
 ```
-WOS/
+WOS-Bot/
 ├── app.py           # FastAPI server + API routes
 ├── device.py        # WindowDevice / ADBDevice abstraction
 ├── engine.py        # Task loader + step executor
 ├── vision.py        # OpenCV template matching
-├── adb.py           # Legacy ADB wrapper
 ├── views/           # Jinja2 HTML templates
 ├── static/          # CSS
 ├── tasks/           # YAML task definitions
@@ -147,6 +129,21 @@ Connects to a physical Android device or emulator via `adb`. Supports remote dev
 ## Tips
 
 - Set `optional: true` on steps that may not always appear (popups, conditional UI)
+- Use `ignore_badge: true` for buttons with changing notification numbers
 - Use `confidence: 0.7` for fuzzy matches, `0.9` for exact matches
 - Crop templates tightly around the target element for best results
-- The bot waits 0.3s between steps automatically
+- Use `loop_templates` to scan and tap multiple buttons in one pass
+
+## Requirements
+
+- Python 3.12+
+- Windows (for Google Play Games window capture)
+- Google Play Games or Android device with ADB
+
+## License
+
+MIT
+
+---
+
+Made by [Augustinus](https://github.com/austxio)
