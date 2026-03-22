@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block nav_tasks %}active{% endblock %}
+{% block topbar_badge %}
+<span class="device-badge {% if current_device_connected %}connected{% endif %}">
+  {{ current_device }}
+</span>
+{% endblock %}
+{% block topbar_right %}
+<form method="post" action="/device/connect-gpg" style="display:inline">
+  <button type="submit" class="btn btn-sm">Connect GPG</button>
+</form>
+<form method="post" action="/device" style="display:inline">
+  <select name="device_id" class="device-select" onchange="this.form.submit()">
+    <option value="">Select device...</option>
+    {% for d in devices %}
+    <option value="{{ d.id }}" {% if d.name == current_device %}selected{% endif %}>
+      {{ d.name }}
+    </option>
+    {% endfor %}
+  </select>
+</form>
+{% endblock %}
+
+{% block content %}
+<div class="content-header">
+  <h2>Tasks</h2>
+  <a href="/tasks/new" class="btn btn-primary">+ New Task</a>
+</div>
+
+{% for task in tasks %}
+<div class="task-card" id="task-{{ task.filename }}">
+  <div class="task-info">
+    <div class="task-icon">
+      {% if task.icon == 'gift' %}&#127873;{% elif task.icon == 'compass' %}&#129517;{% elif task.icon == 'sword' %}&#9876;{% else %}&#9881;{% endif %}
+    </div>
+    <div>
+      <div class="task-name">{{ task.name }}</div>
+      <div class="task-desc">{{ task.description }}</div>
+    </div>
+  </div>
+  <div class="task-actions">
+    {% if task_status.get(task.filename) %}
+    <span class="task-status status-{{ task_status[task.filename].status }}">
+      {{ task_status[task.filename].status | capitalize }}
+    </span>
+    {% else %}
+    <span class="task-status status-idle">Idle</span>
+    {% endif %}
+    <button class="btn btn-run" onclick="runTask('{{ task.filename }}')" {% if running_task %}disabled{% endif %}>
+      &#9654; Run
+    </button>
+    <a href="/tasks/{{ task.filename }}/edit" class="btn btn-edit">Edit</a>
+    <button class="btn btn-delete" onclick="deleteTask('{{ task.filename }}', '{{ task.name }}')">&#10005;</button>
+  </div>
+</div>
+{% endfor %}
+
+{% if not tasks %}
+<div class="empty-state">
+  <p>No tasks yet. Click <strong>+ New Task</strong> to create one, or add YAML files to the <code>tasks/</code> folder.</p>
+</div>
+{% endif %}
+
+{% if running_task %}
+<div style="margin: 1rem 0;">
+  <button class="btn btn-delete" onclick="stopTask()">&#9632; Stop Running Task</button>
+</div>
+{% endif %}
+
+<div class="log-panel">
+  <div class="log-header">
+    <span>Execution Log</span>
+    <span class="log-live" id="log-indicator">Connecting...</span>
+  </div>
+  <div class="log-body" id="log-body"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const logBody = document.getElementById('log-body');
+const logIndicator = document.getElementById('log-indicator');
+let ws;
+
+function connectWS() {
+  ws = new WebSocket(`ws://${location.host}/ws/logs`);
+  ws.onopen = () => { logIndicator.textContent = 'Live'; logIndicator.classList.add('active'); };
+  ws.onclose = () => { logIndicator.textContent = 'Disconnected'; logIndicator.classList.remove('active'); setTimeout(connectWS, 2000); };
+  ws.onmessage = (e) => {
+    const d = JSON.parse(e.data);
+    const line = document.createElement('div');
+    line.className = 'log-line ' + d.level;
+    line.innerHTML = `<span class="time">${d.time}</span> ${d.msg}`;
+    logBody.appendChild(line);
+    logBody.scrollTop = logBody.scrollHeight;
+  };
+}
+connectWS();
+
+async function runTask(filename) {
+  const r = await fetch(`/tasks/${filename}/run`, { method: 'POST' });
+  const d = await r.json();
+  if (d.status === 'ok') {
+    location.reload();
+  } else {
+    alert(d.message || 'Failed to start task');
+  }
+}
+
+async function stopTask() {
+  await fetch('/tasks/stop', { method: 'POST' });
+  location.reload();
+}
+
+async function deleteTask(filename, name) {
+  if (!confirm(`Delete task "${name}"?`)) return;
+  await fetch(`/tasks/${filename}`, { method: 'DELETE' });
+  document.getElementById('task-' + filename)?.remove();
+}
+</script>
+{% endblock %}

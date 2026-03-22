@@ -1,0 +1,22 @@
+name: Claim Reward From Mailbox
+description: Claim Reward From Mailbox
+icon: default
+steps:
+- action: find_and_tap
+  description: ''
+  template: mail_button.png
+  optional: true
+- action: wait
+  description: ''
+  seconds: 2
+- action: find_and_tap
+  description: ''
+  template: claim-all_button.png
+  optional: true
+- action: wait
+  description: ''
+  seconds: 2
+- action: find_and_tap
+  description: ''
+  template: tab-exit_button.png
+  optional: true

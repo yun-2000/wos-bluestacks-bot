@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WOS Bot{% block title_suffix %}{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="https://unpkg.com/htmx.org@2.0.4"></script>
+</head>
+<body>
+<div class="topbar">
+  <div class="topbar-left">
+    <a href="/" class="topbar-logo"><span>WOS</span> Bot</a>
+    {% block topbar_badge %}{% endblock %}
+  </div>
+  <div class="topbar-right">
+    {% block topbar_right %}{% endblock %}
+  </div>
+</div>
+<div class="layout">
+  <nav class="sidebar">
+    <a href="/" class="nav-item {% block nav_tasks %}{% endblock %}">&#9881; Tasks</a>
+    <a href="/template-manager" class="nav-item {% block nav_templates %}{% endblock %}">&#128247; Templates</a>
+  </nav>
+  <main class="content">
+    {% block content %}{% endblock %}
+  </main>
+</div>
+{% block scripts %}{% endblock %}
+</body>
+</html>
