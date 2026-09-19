@@ -43,18 +43,20 @@ def _get_template(tpl_path: Path) -> np.ndarray:
     return _load_template(str(tpl_path), mtime)
 
 
-def find_template(
+def probe_template(
     screenshot: np.ndarray | bytes,
     template_name: str,
     confidence: float = 0.8,
     templates_dir: Path = TEMPLATES_DIR,
     ignore_badge: bool = False,
-) -> MatchResult | None:
+) -> tuple[MatchResult | None, float]:
+    """Return (match_or_none, best_score) for debugging thresholds."""
     if isinstance(screenshot, bytes):
         screenshot = screenshot_to_cv(screenshot)
 
     template = _get_template(templates_dir / template_name)
     orig_th, orig_tw = template.shape[:2]
+    crop_h = crop_w = 0
 
     if ignore_badge:
         crop_h = int(orig_th * 0.65)
@@ -71,20 +73,34 @@ def find_template(
 
     result = cv2.matchTemplate(screenshot, template, cv2.TM_CCOEFF_NORMED)
     _, max_val, _, max_loc = cv2.minMaxLoc(result)
+    score = float(max_val)
 
-    if max_val >= confidence:
+    if score >= confidence:
         if ignore_badge:
             return MatchResult(
                 x=max_loc[0], y=max_loc[1] - (orig_th - crop_h),
                 w=orig_tw, h=orig_th,
-                confidence=round(max_val, 4),
-            )
+                confidence=round(score, 4),
+            ), score
         return MatchResult(
             x=max_loc[0], y=max_loc[1],
             w=tw, h=th,
-            confidence=round(max_val, 4),
-        )
-    return None
+            confidence=round(score, 4),
+        ), score
+    return None, score
+
+
+def find_template(
+    screenshot: np.ndarray | bytes,
+    template_name: str,
+    confidence: float = 0.8,
+    templates_dir: Path = TEMPLATES_DIR,
+    ignore_badge: bool = False,
+) -> MatchResult | None:
+    match, _ = probe_template(
+        screenshot, template_name, confidence, templates_dir, ignore_badge
+    )
+    return match
 
 
 def find_all_templates(

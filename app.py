@@ -66,8 +66,7 @@ async def dashboard(request: Request):
     devices = dm.list_devices()
     current = dm.get_current()
     current_name = current.info().name if current else "No device"
-    return views.TemplateResponse("dashboard.html", {
-        "request": request,
+    return views.TemplateResponse(request, "dashboard.html", {
         "tasks": tasks,
         "devices": devices,
         "current_device": current_name,
@@ -139,8 +138,7 @@ async def stop_task():
 async def edit_task(request: Request, filename: str):
     task = load_task(TASKS_DIR / filename)
     steps_json = jsonlib.dumps([s.to_dict() for s in task.steps])
-    return views.TemplateResponse("task_editor.html", {
-        "request": request,
+    return views.TemplateResponse(request, "task_editor.html", {
         "task": task,
         "filename": filename,
         "templates": list_templates(),
@@ -152,8 +150,7 @@ async def edit_task(request: Request, filename: str):
 
 @app.get("/tasks/new", response_class=HTMLResponse)
 async def new_task(request: Request):
-    return views.TemplateResponse("task_editor.html", {
-        "request": request,
+    return views.TemplateResponse(request, "task_editor.html", {
         "task": None,
         "filename": "",
         "templates": list_templates(),
@@ -190,8 +187,7 @@ async def delete_task_endpoint(filename: str):
 @app.get("/template-manager", response_class=HTMLResponse)
 async def template_manager(request: Request):
     current = dm.get_current()
-    return views.TemplateResponse("template_mgr.html", {
-        "request": request,
+    return views.TemplateResponse(request, "template_mgr.html", {
         "templates": list_templates(),
         "current_device": current.info().name if current else "No device",
     })

@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from device import BaseDevice
-from vision import find_template
+from vision import find_template, probe_template
 
 TASKS_DIR = Path(__file__).parent / "tasks"
 
@@ -36,6 +36,7 @@ class Step:
     templates: list[str] = field(default_factory=list)
     max_loops: int = 0
     loop_delay: float = 1.0
+    tap_y_offset: int = 0
     then_steps: list["Step"] = field(default_factory=list)
     else_steps: list["Step"] = field(default_factory=list)
 
@@ -116,28 +117,71 @@ def run_task(task: Task, dev: BaseDevice, log: LogCallback | None = None, stop_f
             log(level, msg)
 
     emit("info", f"Starting: {task.name}")
-    _run_steps(task.steps, dev, emit, stop_flag)
-    emit("success", f"Task completed: {task.name}")
+    ok = _run_steps(task.steps, dev, emit, stop_flag)
+    if ok:
+        emit("success", f"Task completed: {task.name}")
+    else:
+        emit("error", f"Task failed: {task.name}")
 
 
-def _run_steps(steps: list[Step], dev: BaseDevice, emit: LogCallback, stop_flag: Callable[[], bool] | None = None):
+def _run_steps(steps: list[Step], dev: BaseDevice, emit: LogCallback, stop_flag: Callable[[], bool] | None = None) -> bool:
     for i, step in enumerate(steps):
         if stop_flag and stop_flag():
             emit("warn", "Task stopped by user")
-            return
+            return False
 
         if step.action == "find_and_tap":
             emit("info", f"Looking for: {step.template}")
-            match = _find_with_retry(dev, step, emit)
+            match, best_score = _find_with_retry(dev, step, emit)
             if match:
                 cx, cy = match
-                emit("success", f"Found at ({cx}, {cy})")
+                if step.tap_y_offset:
+                    cy += step.tap_y_offset
+                emit("success", f"Found at ({cx}, {cy})" + (
+                    f" (y+{step.tap_y_offset})" if step.tap_y_offset else ""
+                ))
                 dev.tap(cx, cy)
             elif step.optional:
                 emit("warn", f"Not found (optional): {step.template} — skipping")
+                # #region agent log
+                try:
+                    import json
+                    from pathlib import Path
+                    p = Path(__file__).parent / ".cursor" / "debug-0f25a0.log"
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    with open(p, "a") as f:
+                        f.write(json.dumps({
+                            "sessionId": "0f25a0", "runId": "mag-fix", "hypothesisId": "M",
+                            "location": "engine.py:find_and_tap",
+                            "message": "optional template miss",
+                            "data": {"template": step.template, "best_score": best_score,
+                                     "threshold": step.confidence},
+                            "timestamp": int(time.time() * 1000),
+                        }) + "\n")
+                except Exception:
+                    pass
+                # #endregion
             else:
                 emit("error", f"Not found: {step.template} — aborting")
-                return
+                # #region agent log
+                try:
+                    import json
+                    from pathlib import Path
+                    p = Path(__file__).parent / ".cursor" / "debug-0f25a0.log"
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    with open(p, "a") as f:
+                        f.write(json.dumps({
+                            "sessionId": "0f25a0", "runId": "mag-fix", "hypothesisId": "M",
+                            "location": "engine.py:find_and_tap",
+                            "message": "required template miss abort",
+                            "data": {"template": step.template, "best_score": best_score,
+                                     "threshold": step.confidence},
+                            "timestamp": int(time.time() * 1000),
+                        }) + "\n")
+                except Exception:
+                    pass
+                # #endregion
+                return False
 
         elif step.action == "if_found":
             emit("info", f"Checking: {step.template}")
@@ -145,28 +189,32 @@ def _run_steps(steps: list[Step], dev: BaseDevice, emit: LogCallback, stop_flag:
             result = find_template(img, step.template, step.confidence, ignore_badge=step.ignore_badge)
             if result:
                 emit("success", f"Found {step.template} — THEN")
-                _run_steps(step.then_steps, dev, emit, stop_flag)
+                if not _run_steps(step.then_steps, dev, emit, stop_flag):
+                    return False
             else:
                 emit("warn", f"Not found {step.template} — ELSE")
-                _run_steps(step.else_steps, dev, emit, stop_flag)
+                if not _run_steps(step.else_steps, dev, emit, stop_flag):
+                    return False
 
         elif step.action == "run_task":
             emit("info", f"Running sub-task: {step.task_file}")
             sub = load_task(TASKS_DIR / step.task_file)
-            _run_steps(sub.steps, dev, emit, stop_flag)
+            if not _run_steps(sub.steps, dev, emit, stop_flag):
+                return False
 
         elif step.action == "loop":
             label = step.description or "Loop"
             iteration = 0
             while True:
                 if stop_flag and stop_flag():
-                    break
+                    return False
                 if 0 < step.max_loops <= iteration:
                     break
                 iteration += 1
                 suffix = f"/{step.max_loops}" if step.max_loops else ""
                 emit("info", f"{label} [{iteration}{suffix}]")
-                _run_steps(step.then_steps, dev, emit, stop_flag)
+                if not _run_steps(step.then_steps, dev, emit, stop_flag):
+                    return False
                 time.sleep(step.loop_delay)
             emit("info", f"{label} ended after {iteration} iterations")
 
@@ -176,7 +224,7 @@ def _run_steps(steps: list[Step], dev: BaseDevice, emit: LogCallback, stop_flag:
             found = False
             while True:
                 if stop_flag and stop_flag():
-                    break
+                    return False
                 if 0 < step.max_loops <= iteration:
                     break
                 iteration += 1
@@ -185,21 +233,23 @@ def _run_steps(steps: list[Step], dev: BaseDevice, emit: LogCallback, stop_flag:
                 if result:
                     emit("success", f"{label} — found after {iteration} checks")
                     if step.then_steps:
-                        _run_steps(step.then_steps, dev, emit, stop_flag)
+                        if not _run_steps(step.then_steps, dev, emit, stop_flag):
+                            return False
                     found = True
                     break
                 suffix = f"/{step.max_loops}" if step.max_loops else ""
                 emit("info", f"{label} [{iteration}{suffix}] waiting...")
                 time.sleep(step.loop_delay)
             if not found:
-                emit("warn", f"{label} — not found after {iteration} checks")
+                emit("error", f"{label} — not found after {iteration} checks — aborting")
+                return False
 
         elif step.action == "loop_templates":
             label = step.description or "Loop templates"
             iteration = 0
             while True:
                 if stop_flag and stop_flag():
-                    break
+                    return False
                 if 0 < step.max_loops <= iteration:
                     break
                 iteration += 1
@@ -220,8 +270,14 @@ def _run_steps(steps: list[Step], dev: BaseDevice, emit: LogCallback, stop_flag:
             emit("info", f"{label} ended after {iteration} iterations")
 
         elif step.action == "wait":
-            emit("info", f"Wait {step.seconds}s")
-            time.sleep(step.seconds)
+            label = step.description or f"Wait {step.seconds}s"
+            emit("info", label if step.description else f"Wait {step.seconds}s")
+            deadline = time.time() + step.seconds
+            while time.time() < deadline:
+                if stop_flag and stop_flag():
+                    emit("warn", "Task stopped by user")
+                    return False
+                time.sleep(min(0.5, max(0.0, deadline - time.time())))
 
         elif step.action == "tap":
             emit("info", f"Tap ({step.x}, {step.y})")
@@ -253,31 +309,38 @@ def _run_steps(steps: list[Step], dev: BaseDevice, emit: LogCallback, stop_flag:
                 emit("success", f"Verified: {step.template}")
             else:
                 emit("error", f"Verification failed: {step.template} — aborting")
-                return
+                return False
 
         elif step.action == "repeat":
             emit("info", f"Repeat previous {step.count} steps x{step.times}")
             if i >= step.count:
                 repeat_steps = steps[i - step.count:i]
                 for _ in range(step.times):
-                    _run_steps(repeat_steps, dev, emit, stop_flag)
+                    if not _run_steps(repeat_steps, dev, emit, stop_flag):
+                        return False
 
         else:
             emit("warn", f"Unknown action: {step.action}")
 
-        time.sleep(0.3)
+        time.sleep(0.1)
+
+    return True
 
 
-def _find_with_retry(dev: BaseDevice, step: Step, emit) -> tuple[int, int] | None:
+def _find_with_retry(dev: BaseDevice, step: Step, emit) -> tuple[tuple[int, int] | None, float]:
+    best_score = 0.0
     for attempt in range(step.retries):
         img = dev.screencap()
-        result = find_template(img, step.template, step.confidence, ignore_badge=step.ignore_badge)
+        result, score = probe_template(
+            img, step.template, step.confidence, ignore_badge=step.ignore_badge
+        )
+        best_score = max(best_score, score)
         if result:
-            return result.center
+            return result.center, score
         if attempt < step.retries - 1:
             emit("info", f"Retry {attempt + 1}/{step.retries}...")
             time.sleep(step.retry_delay)
-    return None
+    return None, best_score
 
 
 def _find_with_timeout(dev: BaseDevice, step: Step) -> bool:

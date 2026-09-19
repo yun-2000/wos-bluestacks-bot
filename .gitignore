@@ -1,6 +1,10 @@
-__pycache__
+__pycache__/
 
-screenshots/**/*
+screenshots/
+
+.venv/
+
+.cursor/
 
 .claude
 .superpowers

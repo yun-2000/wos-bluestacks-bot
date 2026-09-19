@@ -1,0 +1,123 @@
+name: Hold Rally
+description: Search target, hold rally, select hun, deploy, then repeat every 3 minutes
+icon: gift
+steps:
+  - action: loop
+    description: Hold rally cycle
+    max_loops: 0
+    loop_delay: 0
+    then:
+      # --- Already on Hold a rally dialog? ---
+      - action: if_found
+        template: hold_a_rally_btn.jpg
+        confidence: 0.72
+        then:
+          - action: find_and_tap
+            template: hold_a_rally_btn.jpg
+            confidence: 0.72
+            retries: 5
+          - action: wait
+            seconds: 0.1
+          - action: run_task
+            task_file: _select_hun_and_deploy.yaml
+        else:
+          # --- Beast popup with Rally already open? ---
+          - action: if_found
+            template: rally_btn.jpg
+            confidence: 0.72
+            then:
+              - action: find_and_tap
+                template: rally_btn.jpg
+                confidence: 0.72
+                retries: 5
+              - action: wait
+                seconds: 0.1
+              - action: loop_until_found
+                template: hold_a_rally_btn.jpg
+                confidence: 0.72
+                max_loops: 10
+                loop_delay: 0.1
+                description: Wait for Hold a rally dialog
+              - action: find_and_tap
+                template: hold_a_rally_btn.jpg
+                confidence: 0.72
+                retries: 5
+              - action: wait
+                seconds: 0.1
+              - action: run_task
+                task_file: _select_hun_and_deploy.yaml
+            else:
+              # --- Need to search for a target first ---
+              - action: if_found
+                template: search_btn.jpg
+                confidence: 0.72
+                then:
+                  - action: find_and_tap
+                    template: search_btn.jpg
+                    confidence: 0.72
+                    retries: 5
+                else:
+                  # Magnifier button is semi-transparent — map bg changes kill high thresholds.
+                  - action: find_and_tap
+                    template: magnifier.jpg
+                    confidence: 0.55
+                    retries: 8
+                    retry_delay: 0.4
+                    optional: true
+                  - action: if_found
+                    template: search_btn.jpg
+                    confidence: 0.70
+                    then: []
+                    else:
+                      # Fallback: fixed world-map magnifier coords (stable across runs)
+                      - action: tap
+                        x: 67
+                        y: 1312
+                      - action: wait
+                        seconds: 0.8
+                  - action: find_and_tap
+                    template: search_btn.jpg
+                    confidence: 0.72
+                    retries: 5
+                    retry_delay: 0.3
+
+              - action: wait
+                seconds: 0.1
+
+              - action: loop_until_found
+                template: rally_btn.jpg
+                confidence: 0.72
+                max_loops: 12
+                loop_delay: 0.1
+                description: Wait for Rally button on target popup
+
+              - action: find_and_tap
+                template: rally_btn.jpg
+                confidence: 0.72
+                retries: 5
+
+              - action: wait
+                seconds: 0.1
+
+              - action: loop_until_found
+                template: hold_a_rally_btn.jpg
+                confidence: 0.72
+                max_loops: 10
+                loop_delay: 0.1
+                description: Wait for Hold a rally dialog
+
+              - action: find_and_tap
+                template: hold_a_rally_btn.jpg
+                confidence: 0.72
+                retries: 5
+
+              - action: wait
+                seconds: 0.1
+
+              - action: run_task
+                task_file: _select_hun_and_deploy.yaml
+
+      # After a successful deploy, wait 3 minutes then start the next cycle
+      - action: wait
+        seconds: 210
+        description: Wait 3.5 minutes before next rally
