@@ -143,44 +143,8 @@ def _run_steps(steps: list[Step], dev: BaseDevice, emit: LogCallback, stop_flag:
                 dev.tap(cx, cy)
             elif step.optional:
                 emit("warn", f"Not found (optional): {step.template} — skipping")
-                # #region agent log
-                try:
-                    import json
-                    from pathlib import Path
-                    p = Path(__file__).parent / ".cursor" / "debug-0f25a0.log"
-                    p.parent.mkdir(parents=True, exist_ok=True)
-                    with open(p, "a") as f:
-                        f.write(json.dumps({
-                            "sessionId": "0f25a0", "runId": "mag-fix", "hypothesisId": "M",
-                            "location": "engine.py:find_and_tap",
-                            "message": "optional template miss",
-                            "data": {"template": step.template, "best_score": best_score,
-                                     "threshold": step.confidence},
-                            "timestamp": int(time.time() * 1000),
-                        }) + "\n")
-                except Exception:
-                    pass
-                # #endregion
             else:
                 emit("error", f"Not found: {step.template} — aborting")
-                # #region agent log
-                try:
-                    import json
-                    from pathlib import Path
-                    p = Path(__file__).parent / ".cursor" / "debug-0f25a0.log"
-                    p.parent.mkdir(parents=True, exist_ok=True)
-                    with open(p, "a") as f:
-                        f.write(json.dumps({
-                            "sessionId": "0f25a0", "runId": "mag-fix", "hypothesisId": "M",
-                            "location": "engine.py:find_and_tap",
-                            "message": "required template miss abort",
-                            "data": {"template": step.template, "best_score": best_score,
-                                     "threshold": step.confidence},
-                            "timestamp": int(time.time() * 1000),
-                        }) + "\n")
-                except Exception:
-                    pass
-                # #endregion
                 return False
 
         elif step.action == "if_found":

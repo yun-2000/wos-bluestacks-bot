@@ -574,39 +574,7 @@ class ADBDevice(BaseDevice):
             return
         try:
             self._run(["shell", "input", "tap", str(x), str(y)], retries=2)
-            # #region agent log
-            try:
-                import json
-                from pathlib import Path
-                p = Path(__file__).parent / ".cursor" / "debug-0f25a0.log"
-                p.parent.mkdir(parents=True, exist_ok=True)
-                with open(p, "a") as f:
-                    f.write(json.dumps({
-                        "sessionId": "0f25a0", "runId": "adb-fix", "hypothesisId": "A",
-                        "location": "device.py:tap", "message": "ADB shell input tap OK",
-                        "data": {"xy": [x, y], "prefer_mac": self._prefer_mac_input},
-                        "timestamp": int(time.time() * 1000),
-                    }) + "\n")
-            except Exception:
-                pass
-            # #endregion
         except RuntimeError as e:
-            # #region agent log
-            try:
-                import json
-                from pathlib import Path
-                p = Path(__file__).parent / ".cursor" / "debug-0f25a0.log"
-                p.parent.mkdir(parents=True, exist_ok=True)
-                with open(p, "a") as f:
-                    f.write(json.dumps({
-                        "sessionId": "0f25a0", "runId": "adb-fix", "hypothesisId": "A",
-                        "location": "device.py:tap", "message": "ADB shell input FAILED",
-                        "data": {"xy": [x, y], "error": str(e)[:200], "prefer_mac": self._prefer_mac_input},
-                        "timestamp": int(time.time() * 1000),
-                    }) + "\n")
-            except Exception:
-                pass
-            # #endregion
             if IS_MAC and "closed" in str(e).lower():
                 self._prefer_mac_input = True
                 self._mac_tap(x, y)
