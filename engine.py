@@ -224,37 +224,10 @@ def _run_steps(steps: list[Step], dev: BaseDevice, emit: LogCallback, stop_flag:
                 img = dev.screencap()
                 try:
                     raw = read_text(img, region)
-                except RuntimeError as e:
+                except (RuntimeError, ValueError) as e:
                     emit("error", str(e))
                     return False
                 matched = text_matches(raw, step.text)
-                # #region agent log
-                try:
-                    import json
-                    from pathlib import Path
-                    from vision import normalize_ocr_text
-                    sh, sw = img.shape[:2]
-                    with Path(__file__).parent.joinpath(".cursor/debug-56bd45.log").open("a") as _f:
-                        _f.write(json.dumps({
-                            "sessionId": "56bd45",
-                            "runId": "post-fix",
-                            "hypothesisId": "A,B",
-                            "location": "engine.py:loop_until_text",
-                            "message": "gate check",
-                            "data": {
-                                "iteration": iteration,
-                                "region": region,
-                                "expected": step.text,
-                                "raw": raw,
-                                "norm": normalize_ocr_text(raw),
-                                "matched": matched,
-                                "screen": [sw, sh],
-                            },
-                            "timestamp": int(time.time() * 1000),
-                        }, ensure_ascii=False) + "\n")
-                except Exception:
-                    pass
-                # #endregion
                 if matched:
                     emit("success", f"{label} — matched '{raw.strip()}' after {iteration} checks")
                     if step.then_steps:

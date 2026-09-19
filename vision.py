@@ -236,28 +236,4 @@ def read_text(
             "Tesseract not found. Install with: brew install tesseract"
         ) from e
     combined = " ".join(parts)
-    # #region agent log
-    try:
-        import json, time
-        from pathlib import Path
-        sh, sw = screenshot.shape[:2]
-        with Path(__file__).parent.joinpath(".cursor/debug-56bd45.log").open("a") as _f:
-            _f.write(json.dumps({
-                "sessionId": "56bd45",
-                "hypothesisId": "A,B",
-                "location": "vision.py:read_text",
-                "message": "OCR result",
-                "data": {
-                    "screen": [sw, sh],
-                    "region_pct": region_pct,
-                    "parts": parts,
-                    "combined": combined,
-                    "norm": normalize_ocr_text(combined),
-                    "roi_shape": list(roi.shape),
-                },
-                "timestamp": int(time.time() * 1000),
-            }, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-    # #endregion
     return combined
