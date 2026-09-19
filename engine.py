@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from device import BaseDevice
-from vision import find_template, probe_template
+from vision import find_template, probe_template, read_text, text_matches
 
 TASKS_DIR = Path(__file__).parent / "tasks"
 
@@ -37,6 +37,8 @@ class Step:
     max_loops: int = 0
     loop_delay: float = 1.0
     tap_y_offset: int = 0
+    text: str = ""
+    region_pct: list[float] = field(default_factory=list)
     then_steps: list["Step"] = field(default_factory=list)
     else_steps: list["Step"] = field(default_factory=list)
 
@@ -206,6 +208,65 @@ def _run_steps(steps: list[Step], dev: BaseDevice, emit: LogCallback, stop_flag:
                 time.sleep(step.loop_delay)
             if not found:
                 emit("error", f"{label} — not found after {iteration} checks — aborting")
+                return False
+
+        elif step.action == "loop_until_text":
+            label = step.description or f"Wait for text '{step.text}'"
+            region = step.region_pct or [0.55, 0.0, 1.0, 0.10]
+            iteration = 0
+            found = False
+            while True:
+                if stop_flag and stop_flag():
+                    return False
+                if 0 < step.max_loops <= iteration:
+                    break
+                iteration += 1
+                img = dev.screencap()
+                try:
+                    raw = read_text(img, region)
+                except RuntimeError as e:
+                    emit("error", str(e))
+                    return False
+                matched = text_matches(raw, step.text)
+                # #region agent log
+                try:
+                    import json
+                    from pathlib import Path
+                    from vision import normalize_ocr_text
+                    sh, sw = img.shape[:2]
+                    with Path(__file__).parent.joinpath(".cursor/debug-56bd45.log").open("a") as _f:
+                        _f.write(json.dumps({
+                            "sessionId": "56bd45",
+                            "runId": "post-fix",
+                            "hypothesisId": "A,B",
+                            "location": "engine.py:loop_until_text",
+                            "message": "gate check",
+                            "data": {
+                                "iteration": iteration,
+                                "region": region,
+                                "expected": step.text,
+                                "raw": raw,
+                                "norm": normalize_ocr_text(raw),
+                                "matched": matched,
+                                "screen": [sw, sh],
+                            },
+                            "timestamp": int(time.time() * 1000),
+                        }, ensure_ascii=False) + "\n")
+                except Exception:
+                    pass
+                # #endregion
+                if matched:
+                    emit("success", f"{label} — matched '{raw.strip()}' after {iteration} checks")
+                    if step.then_steps:
+                        if not _run_steps(step.then_steps, dev, emit, stop_flag):
+                            return False
+                    found = True
+                    break
+                suffix = f"/{step.max_loops}" if step.max_loops else ""
+                emit("info", f"{label} [{iteration}{suffix}] OCR='{raw.strip()}' waiting...")
+                time.sleep(step.loop_delay)
+            if not found:
+                emit("error", f"{label} — not matched after {iteration} checks — aborting")
                 return False
 
         elif step.action == "loop_templates":

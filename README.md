@@ -11,7 +11,8 @@ Build custom automation tasks using a drag-and-drop step editor, template matchi
 - **Task Builder GUI** — Create, edit, and reorder automation steps visually
 - **Template Matching** — Screenshot cropping tool to capture UI elements as templates
 - **Smart Matching** — Ignore notification badges, adjustable confidence threshold
-- **Conditional Logic** — `if_found` / `else` branching, `loop`, `loop_until_found`, `loop_templates`
+- **Conditional Logic** — `if_found` / `else` branching, `loop`, `loop_until_found`, `loop_until_text`, `loop_templates`
+- **OCR Gate** — Wait until on-screen text matches (e.g. Marching `1/6`) via Tesseract
 - **Sub-tasks** — Run reusable task files from within other tasks
 - **Live Log** — WebSocket-powered real-time execution log
 
@@ -21,6 +22,9 @@ Build custom automation tasks using a drag-and-drop step editor, template matchi
 git clone https://github.com/austxio/WOS-Bot.git && cd WOS-Bot
 pip install -r requirements.txt
 pip install pyautogui pygetwindow
+# OCR (loop_until_text) needs system Tesseract:
+#   macOS: brew install tesseract
+#   Windows: install from https://github.com/UB-Mannheim/tesseract/wiki
 python app.py
 ```
 
@@ -47,6 +51,7 @@ Open **http://localhost:8000** in your browser.
 | `run_task` | Execute another task file as sub-task |
 | `loop` | Repeat steps N times or until stopped |
 | `loop_until_found` | Keep checking until template appears |
+| `loop_until_text` | Keep checking until OCR reads expected text in a region |
 | `loop_templates` | Cycle through multiple templates, tap any found |
 | `verify` | Assert template is visible |
 | `screenshot` | Save debug screenshot |
@@ -110,7 +115,7 @@ WOS-Bot/
 ├── app.py           # FastAPI server + API routes
 ├── device.py        # WindowDevice / ADBDevice abstraction
 ├── engine.py        # Task loader + step executor
-├── vision.py        # OpenCV template matching
+├── vision.py        # OpenCV template matching + Tesseract OCR
 ├── views/           # Jinja2 HTML templates
 ├── static/          # CSS
 ├── tasks/           # YAML task definitions
@@ -137,8 +142,9 @@ Connects to a physical Android device or emulator via `adb`. Supports remote dev
 ## Requirements
 
 - Python 3.12+
-- Windows (for Google Play Games window capture)
+- Windows (for Google Play Games window capture) or macOS (BlueStacks / Quartz)
 - Google Play Games or Android device with ADB
+- Tesseract OCR (`brew install tesseract` on macOS) for `loop_until_text`
 
 ## License
 

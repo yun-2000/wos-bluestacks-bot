@@ -1,5 +1,5 @@
 name: Hold Rally
-description: Search target, hold rally, select hun, deploy, then repeat every 3 minutes
+description: Search target, hold rally, select hun, deploy, then repeat when Marching is 1/6
 icon: gift
 steps:
   - action: loop
@@ -7,6 +7,15 @@ steps:
     max_loops: 0
     loop_delay: 0
     then:
+      # Gate: only open a rally when top-right Marching shows 1/6
+      - action: loop_until_text
+        text: "1/6"
+        # Marching bar is left-side below top HUD (not top-right resources)
+        region_pct: [0.0, 0.13, 0.40, 0.20]
+        max_loops: 0
+        loop_delay: 2
+        description: Wait until Marching is 1/6
+
       # --- Already on Hold a rally dialog? ---
       - action: if_found
         template: hold_a_rally_btn.jpg
@@ -116,8 +125,3 @@ steps:
 
               - action: run_task
                 task_file: _select_hun_and_deploy.yaml
-
-      # After a successful deploy, wait 3 minutes then start the next cycle
-      - action: wait
-        seconds: 210
-        description: Wait 3.5 minutes before next rally

@@ -149,3 +149,115 @@ def crop_from_screenshot(png_bytes: bytes, x: int, y: int, w: int, h: int) -> by
     cropped = img[y:y + h, x:x + w]
     _, buf = cv2.imencode(".png", cropped)
     return buf.tobytes()
+
+
+def _crop_region_pct(screenshot: np.ndarray, region_pct: list[float]) -> np.ndarray:
+    if len(region_pct) != 4:
+        raise ValueError("region_pct must be [left, top, right, bottom] in 0–1 fractions")
+    left, top, right, bottom = region_pct
+    sh, sw = screenshot.shape[:2]
+    x1 = max(0, min(sw, int(sw * left)))
+    y1 = max(0, min(sh, int(sh * top)))
+    x2 = max(0, min(sw, int(sw * right)))
+    y2 = max(0, min(sh, int(sh * bottom)))
+    if x2 <= x1 or y2 <= y1:
+        raise ValueError(f"Invalid OCR region after crop: {(x1, y1, x2, y2)}")
+    return screenshot[y1:y2, x1:x2]
+
+
+def _preprocess_for_ocr(roi: np.ndarray, scale: float = 3.0) -> np.ndarray:
+    """Prepare white-on-dark game UI text for Tesseract."""
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) if roi.ndim == 3 else roi
+    up = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    inverted = cv2.bitwise_not(up)
+    _, binary = cv2.threshold(inverted, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    return binary
+
+
+def normalize_ocr_text(raw: str) -> str:
+    """Strip noise and fix common digit misreads."""
+    s = "".join(raw.split())
+    # Game font often turns "1/" into "V" (e.g. "Marching V6")
+    s = s.replace("V6", "1/6").replace("v6", "1/6")
+    s = s.replace("V/", "1/").replace("v/", "1/")
+    trans = str.maketrans({
+        "l": "1", "I": "1", "i": "1", "|": "1",
+        "O": "0", "o": "0",
+        "S": "5", "s": "5",
+        "B": "8",
+    })
+    return s.translate(trans)
+
+
+def text_matches(raw: str, expected: str) -> bool:
+    if not expected:
+        return False
+    norm_raw = normalize_ocr_text(raw)
+    norm_exp = normalize_ocr_text(expected)
+    if norm_exp in norm_raw:
+        return True
+    # Also accept compact forms like "16" for "1/6"
+    if "/" in norm_exp:
+        compact = norm_exp.replace("/", "")
+        if compact and compact in norm_raw.replace("/", ""):
+            return True
+    return False
+
+
+def read_text(
+    screenshot: np.ndarray | bytes,
+    region_pct: list[float],
+    *,
+    whitelist: str = "0123456789/",
+    psm: int = 7,
+) -> str:
+    """OCR text from a relative screenshot region (0–1 fractions)."""
+    import pytesseract
+
+    if isinstance(screenshot, bytes):
+        screenshot = screenshot_to_cv(screenshot)
+
+    roi = _crop_region_pct(screenshot, region_pct)
+    processed = _preprocess_for_ocr(roi)
+    configs = [
+        f"--psm {psm} -c tessedit_char_whitelist={whitelist}",
+        f"--psm {psm}",
+        "--psm 6",
+        "--psm 8 -c tessedit_char_whitelist=0123456789/",
+    ]
+    parts: list[str] = []
+    try:
+        for cfg in configs:
+            t = pytesseract.image_to_string(processed, config=cfg) or ""
+            if t.strip():
+                parts.append(t)
+    except pytesseract.TesseractNotFoundError as e:
+        raise RuntimeError(
+            "Tesseract not found. Install with: brew install tesseract"
+        ) from e
+    combined = " ".join(parts)
+    # #region agent log
+    try:
+        import json, time
+        from pathlib import Path
+        sh, sw = screenshot.shape[:2]
+        with Path(__file__).parent.joinpath(".cursor/debug-56bd45.log").open("a") as _f:
+            _f.write(json.dumps({
+                "sessionId": "56bd45",
+                "hypothesisId": "A,B",
+                "location": "vision.py:read_text",
+                "message": "OCR result",
+                "data": {
+                    "screen": [sw, sh],
+                    "region_pct": region_pct,
+                    "parts": parts,
+                    "combined": combined,
+                    "norm": normalize_ocr_text(combined),
+                    "roi_shape": list(roi.shape),
+                },
+                "timestamp": int(time.time() * 1000),
+            }, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+    # #endregion
+    return combined

@@ -54,8 +54,8 @@
 <script>
 const templateOptions = [{% for t in templates %}'{{ t }}',{% endfor %}];
 const taskFileOptions = [{% for f in task_files %}'{{ f }}',{% endfor %}];
-const actionList = ['find_and_tap','wait','tap','swipe','tap_dismiss','tap_back','screenshot','verify','repeat','if_found','run_task','loop','loop_until_found','loop_templates'];
-const BRANCH_ACTIONS = ['if_found','loop','loop_until_found'];
+const actionList = ['find_and_tap','wait','tap','swipe','tap_dismiss','tap_back','screenshot','verify','repeat','if_found','run_task','loop','loop_until_found','loop_until_text','loop_templates'];
+const BRANCH_ACTIONS = ['if_found','loop','loop_until_found','loop_until_text'];
 
 let dragRow = null;
 
@@ -112,6 +112,15 @@ function loopFields(data) {
   return `<span style="color:#8b949e;font-size:0.75rem">max</span> <input type="number" class="step-max-loops" value="${data.max_loops||0}" min="0" style="width:55px" title="0 = infinite"> <span style="color:#8b949e;font-size:0.75rem">delay</span> <input type="number" class="step-loop-delay" value="${data.loop_delay||1}" min="0.1" step="0.1" style="width:55px"> <span style="color:#8b949e;font-size:0.75rem">sec</span>`;
 }
 
+function regionPctFields(data) {
+  const r = data.region_pct || [0.55, 0.0, 1.0, 0.10];
+  return `<span style="color:#8b949e;font-size:0.75rem">ROI%</span>
+    <input type="number" class="step-rp-l" value="${r[0]}" min="0" max="1" step="0.01" style="width:55px" title="left">
+    <input type="number" class="step-rp-t" value="${r[1]}" min="0" max="1" step="0.01" style="width:55px" title="top">
+    <input type="number" class="step-rp-r" value="${r[2]}" min="0" max="1" step="0.01" style="width:55px" title="right">
+    <input type="number" class="step-rp-b" value="${r[3]}" min="0" max="1" step="0.01" style="width:55px" title="bottom">`;
+}
+
 function getFieldsHTML(action, data) {
   data = data || {};
   if (action === 'find_and_tap' || action === 'verify')
@@ -124,6 +133,8 @@ function getFieldsHTML(action, data) {
     return loopFields(data);
   if (action === 'loop_until_found')
     return `${makeTemplateSelect(data.template||'')} ${loopFields(data)} <label class="step-optional-label"><input type="checkbox" class="step-ignore-badge" ${data.ignore_badge?'checked':''}> Ignore badge</label>`;
+  if (action === 'loop_until_text')
+    return `<input type="text" class="step-text" value="${data.text||''}" placeholder="1/6" style="width:70px"> ${regionPctFields(data)} ${loopFields(data)}`;
   if (action === 'loop_templates')
     return `${loopFields(data)} <label class="step-optional-label"><input type="checkbox" class="step-ignore-badge" ${data.ignore_badge?'checked':''}> Ignore badge</label>${makeTemplateCheckboxes(data.templates)}`;
   if (action === 'wait')
@@ -149,7 +160,7 @@ function makeBranches(action) {
         <div class="branch-steps"></div>
       </div>`;
   }
-  if (action === 'loop' || action === 'loop_until_found') {
+  if (action === 'loop' || action === 'loop_until_found' || action === 'loop_until_text') {
     return `
       <div class="branch-block then-block">
         <div class="branch-header"><span class="branch-label branch-body">${action === 'loop' ? 'BODY' : 'ON FOUND'}</span><button class="btn btn-sm" onclick="addStep(this.closest('.branch-block').querySelector('.branch-steps'))">+ Step</button></div>
@@ -248,6 +259,18 @@ function collectSteps(container) {
       if (row.querySelector('.step-fields .step-ignore-badge')?.checked) step.ignore_badge = true;
       const branches = row.querySelector('.step-branches');
       if (branches) step.then = collectSteps(branches.querySelector('.then-block .branch-steps'));
+    } else if (action === 'loop_until_text') {
+      step.text = row.querySelector('.step-text')?.value || '';
+      step.region_pct = [
+        parseFloat(row.querySelector('.step-rp-l')?.value || 0.55),
+        parseFloat(row.querySelector('.step-rp-t')?.value || 0),
+        parseFloat(row.querySelector('.step-rp-r')?.value || 1),
+        parseFloat(row.querySelector('.step-rp-b')?.value || 0.10),
+      ];
+      step.max_loops = parseInt(row.querySelector('.step-max-loops')?.value || 0);
+      step.loop_delay = parseFloat(row.querySelector('.step-loop-delay')?.value || 1);
+      const branches = row.querySelector('.step-branches');
+      if (branches) step.then = collectSteps(branches.querySelector('.then-block .branch-steps'));
     } else if (action === 'loop_templates') {
       step.max_loops = parseInt(row.querySelector('.step-max-loops')?.value || 0);
       step.loop_delay = parseFloat(row.querySelector('.step-loop-delay')?.value || 1);
@@ -312,6 +335,8 @@ function stepToData(step) {
   if (step.times !== undefined && step.times !== 1) d.times = step.times;
   if (step.task_file) d.task_file = step.task_file;
   if (step.templates && step.templates.length) d.templates = step.templates;
+  if (step.text) d.text = step.text;
+  if (step.region_pct && step.region_pct.length) d.region_pct = step.region_pct;
   if (step.max_loops) d.max_loops = step.max_loops;
   if (step.loop_delay !== undefined && step.loop_delay !== 1) d.loop_delay = step.loop_delay;
   if (step.then_steps && step.then_steps.length) d.then = step.then_steps.map(stepToData);
