@@ -56,15 +56,14 @@ steps:
               - action: run_task
                 task_file: _select_hun_and_deploy.yaml
             else:
-              # --- Need to search for a target first ---
+              # --- Make sure the search panel is open ---
               - action: if_found
                 template: search_btn.jpg
                 confidence: 0.72
                 then:
-                  - action: find_and_tap
-                    template: search_btn.jpg
-                    confidence: 0.72
-                    retries: 5
+                  - action: wait
+                    seconds: 0.05
+                    description: Search panel already open
                 else:
                   # Open search panel via left-HUD magnifier (ROI avoids map false-matches).
                   # Do NOT re-tap fixed coords after a successful magnifier tap — when the
@@ -89,11 +88,16 @@ steps:
                         description: Magnifier fallback (panel closed only)
                       - action: wait
                         seconds: 0.8
-                  - action: find_and_tap
-                    template: search_btn.jpg
-                    confidence: 0.72
-                    retries: 5
-                    retry_delay: 0.3
+
+              # --- Pick the beast before searching ---
+              - action: run_task
+                task_file: _select_polar_terror.yaml
+
+              - action: find_and_tap
+                template: search_btn.jpg
+                confidence: 0.72
+                retries: 5
+                retry_delay: 0.3
 
               - action: wait
                 seconds: 0.1

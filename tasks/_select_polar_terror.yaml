@@ -1,0 +1,37 @@
+name: Select Polar Terror
+description: Pick the Polar Terror beast in the open search panel (sub-task)
+icon: default
+steps:
+  - action: if_found
+    template: polar_terror.jpg
+    confidence: 0.72
+    region_pct: [0.0, 0.64, 1.0, 0.80]
+    then:
+      - action: find_and_tap
+        template: polar_terror.jpg
+        confidence: 0.72
+        region_pct: [0.0, 0.64, 1.0, 0.80]
+        retries: 3
+        retry_delay: 0.2
+        description: Select Polar Terror
+    else:
+      # Category row is a horizontal carousel — scroll back toward the first entries.
+      - action: swipe
+        x1: 250
+        y1: 1375
+        x2: 900
+        y2: 1375
+        duration_ms: 400
+        description: Scroll beast row to reveal Polar Terror
+      - action: wait
+        seconds: 0.5
+      - action: find_and_tap
+        template: polar_terror.jpg
+        confidence: 0.72
+        region_pct: [0.0, 0.64, 1.0, 0.80]
+        retries: 3
+        retry_delay: 0.3
+        optional: true
+        description: Select Polar Terror (after scroll)
+  - action: wait
+    seconds: 0.3

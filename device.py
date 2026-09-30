@@ -303,6 +303,25 @@ class ADBDevice(BaseDevice):
     def press_back(self):
         self._run(["shell", "input", "keyevent", "KEYCODE_BACK"])
 
+    def force_stop(self, package: str):
+        self._run(["shell", "am", "force-stop", package])
+
+    def launch(self, package: str):
+        self._run([
+            "shell", "monkey", "-p", package,
+            "-c", "android.intent.category.LAUNCHER", "1",
+        ])
+
+    def foreground_package(self) -> str:
+        out = self._run(["shell", "dumpsys", "activity", "top"])
+        for line in out.splitlines()[:40]:
+            if "ACTIVITY" not in line:
+                continue
+            for part in line.split():
+                if "/" in part and "." in part:
+                    return part.split("/", 1)[0]
+        return ""
+
     def info(self) -> DeviceInfo:
         return DeviceInfo(id=self.serial, name=f"ADB: {self.serial}", type="adb", connected=True)
 

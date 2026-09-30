@@ -1,0 +1,46 @@
+name: Select hun and Deploy
+description: Select hun troop preset then deploy (sub-task)
+icon: default
+steps:
+  # Already on deploy screen with hun preset visible?
+  - action: if_found
+    template: choose_troop_btn.jpg
+    confidence: 0.72
+    then:
+      - action: find_and_tap
+        template: choose_troop_btn.jpg
+        confidence: 0.72
+        retries: 5
+        description: Select hun formation
+    else:
+      - action: loop_until_found
+        template: choose_troop_btn.jpg
+        confidence: 0.72
+        max_loops: 10
+        loop_delay: 0.1
+        description: Wait for troop presets (hun)
+      - action: find_and_tap
+        template: choose_troop_btn.jpg
+        confidence: 0.72
+        retries: 5
+        description: Select hun formation
+
+  - action: wait
+    seconds: 0.1
+
+  - action: loop_until_found
+    template: deploy_btn.jpg
+    confidence: 0.72
+    max_loops: 8
+    loop_delay: 0.1
+    description: Wait for Deploy button
+
+  - action: find_and_tap
+    template: deploy_btn.jpg
+    confidence: 0.72
+    retries: 5
+    tap_y_offset: 65
+    description: Deploy with hun formation
+
+  - action: wait
+    seconds: 0.1

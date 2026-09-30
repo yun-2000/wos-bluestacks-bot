@@ -147,6 +147,7 @@ def run_task(task: Task, dev: BaseDevice, log: LogCallback | None = None, stop_f
         emit("success", f"Task completed: {task.name}")
     else:
         emit("error", f"Task failed: {task.name}")
+    return ok
 
 
 def _run_steps(steps: list[Step], dev: BaseDevice, emit: LogCallback, stop_flag: Callable[[], bool] | None = None) -> bool:
