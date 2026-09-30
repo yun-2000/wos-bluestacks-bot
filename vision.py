@@ -49,10 +49,25 @@ def probe_template(
     confidence: float = 0.8,
     templates_dir: Path = TEMPLATES_DIR,
     ignore_badge: bool = False,
+    region_pct: list[float] | None = None,
 ) -> tuple[MatchResult | None, float]:
-    """Return (match_or_none, best_score) for debugging thresholds."""
+    """Return (match_or_none, best_score) for debugging thresholds.
+
+    Optional region_pct=[left, top, right, bottom] (0–1) limits the search ROI
+    so semi-transparent HUD icons are not mistaken for map terrain.
+    """
     if isinstance(screenshot, bytes):
         screenshot = screenshot_to_cv(screenshot)
+
+    ox = oy = 0
+    if region_pct:
+        search = _crop_region_pct(screenshot, region_pct)
+        sh0, sw0 = screenshot.shape[:2]
+        left, top, _, _ = region_pct
+        ox = max(0, min(sw0, int(sw0 * left)))
+        oy = max(0, min(sh0, int(sh0 * top)))
+    else:
+        search = screenshot
 
     template = _get_template(templates_dir / template_name)
     orig_th, orig_tw = template.shape[:2]
@@ -64,26 +79,27 @@ def probe_template(
         template = template[orig_th - crop_h:orig_th, 0:crop_w].copy()
 
     th, tw = template.shape[:2]
-    sh, sw = screenshot.shape[:2]
+    sh, sw = search.shape[:2]
 
     if tw > sw or th > sh:
         scale = min(sw / tw, sh / th) * 0.9
         template = cv2.resize(template, None, fx=scale, fy=scale)
         th, tw = template.shape[:2]
 
-    result = cv2.matchTemplate(screenshot, template, cv2.TM_CCOEFF_NORMED)
+    result = cv2.matchTemplate(search, template, cv2.TM_CCOEFF_NORMED)
     _, max_val, _, max_loc = cv2.minMaxLoc(result)
     score = float(max_val)
+    mx, my = max_loc[0] + ox, max_loc[1] + oy
 
     if score >= confidence:
         if ignore_badge:
             return MatchResult(
-                x=max_loc[0], y=max_loc[1] - (orig_th - crop_h),
+                x=mx, y=my - (orig_th - crop_h),
                 w=orig_tw, h=orig_th,
                 confidence=round(score, 4),
             ), score
         return MatchResult(
-            x=max_loc[0], y=max_loc[1],
+            x=mx, y=my,
             w=tw, h=th,
             confidence=round(score, 4),
         ), score
@@ -96,9 +112,10 @@ def find_template(
     confidence: float = 0.8,
     templates_dir: Path = TEMPLATES_DIR,
     ignore_badge: bool = False,
+    region_pct: list[float] | None = None,
 ) -> MatchResult | None:
     match, _ = probe_template(
-        screenshot, template_name, confidence, templates_dir, ignore_badge
+        screenshot, template_name, confidence, templates_dir, ignore_badge, region_pct
     )
     return match
 
@@ -202,6 +219,19 @@ def text_matches(raw: str, expected: str) -> bool:
         if compact and compact in norm_raw.replace("/", ""):
             return True
     return False
+
+
+def text_matches_pattern(raw: str, pattern: str) -> bool:
+    """Match OCR text against a regex pattern (applied to normalized text)."""
+    import re
+
+    if not pattern:
+        return False
+    try:
+        rx = re.compile(pattern)
+    except re.error as e:
+        raise ValueError(f"Invalid text_pattern '{pattern}': {e}") from e
+    return rx.search(normalize_ocr_text(raw)) is not None
 
 
 def read_text(

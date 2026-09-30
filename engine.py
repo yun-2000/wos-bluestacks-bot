@@ -1,3 +1,4 @@
+import json
 import time
 import yaml
 from pathlib import Path
@@ -5,9 +6,30 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from device import BaseDevice
-from vision import find_template, probe_template, read_text, text_matches
+from vision import find_template, probe_template, read_text, text_matches, text_matches_pattern
 
 TASKS_DIR = Path(__file__).parent / "tasks"
+
+# #region agent log
+_AGENT_DBG_LOG = Path(__file__).parent / ".cursor" / "debug-e30bb2.log"
+
+
+def _agent_dbg(hypothesis_id: str, location: str, message: str, data: dict | None = None):
+    try:
+        _AGENT_DBG_LOG.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "sessionId": "e30bb2",
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data or {},
+            "timestamp": int(time.time() * 1000),
+        }
+        with _AGENT_DBG_LOG.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+# #endregion
 
 
 @dataclass
@@ -38,6 +60,7 @@ class Step:
     loop_delay: float = 1.0
     tap_y_offset: int = 0
     text: str = ""
+    text_pattern: str = ""
     region_pct: list[float] = field(default_factory=list)
     then_steps: list["Step"] = field(default_factory=list)
     else_steps: list["Step"] = field(default_factory=list)
@@ -142,9 +165,46 @@ def _run_steps(steps: list[Step], dev: BaseDevice, emit: LogCallback, stop_flag:
                 emit("success", f"Found at ({cx}, {cy})" + (
                     f" (y+{step.tap_y_offset})" if step.tap_y_offset else ""
                 ))
+                # #region agent log
+                try:
+                    scr = getattr(dev, "_screen_size", None)
+                    sw, sh = scr if scr else (0, 0)
+                    if not sw or not sh:
+                        img0 = dev.screencap()
+                        sh, sw = img0.shape[:2]
+                    zone = (
+                        "LEFT_HUD" if cx < sw * 0.18 and cy > sh * 0.55
+                        else "MAP_FLOOR" if sw * 0.15 < cx < sw * 0.85 and sh * 0.2 < cy < sh * 0.85
+                        else "OTHER"
+                    )
+                    _agent_dbg(
+                        "H1" if "magnifier" in (step.template or "") else "H3",
+                        "engine.py:find_and_tap",
+                        "find_and_tap match",
+                        {
+                            "template": step.template,
+                            "confidence": step.confidence,
+                            "score": round(float(best_score), 4),
+                            "tap": [cx, cy],
+                            "screen": [sw, sh],
+                            "zone": zone,
+                            "pct": [round(cx / sw, 3), round(cy / sh, 3)] if sw and sh else None,
+                        },
+                    )
+                except Exception:
+                    pass
+                # #endregion
                 dev.tap(cx, cy)
             elif step.optional:
                 emit("warn", f"Not found (optional): {step.template} — skipping")
+                # #region agent log
+                _agent_dbg(
+                    "H2",
+                    "engine.py:find_and_tap",
+                    "find_and_tap miss optional",
+                    {"template": step.template, "score": round(float(best_score), 4), "confidence": step.confidence},
+                )
+                # #endregion
             else:
                 emit("error", f"Not found: {step.template} — aborting")
                 return False
@@ -152,13 +212,42 @@ def _run_steps(steps: list[Step], dev: BaseDevice, emit: LogCallback, stop_flag:
         elif step.action == "if_found":
             emit("info", f"Checking: {step.template}")
             img = dev.screencap()
-            result = find_template(img, step.template, step.confidence, ignore_badge=step.ignore_badge)
+            result = find_template(
+                img, step.template, step.confidence,
+                ignore_badge=step.ignore_badge,
+                region_pct=step.region_pct or None,
+            )
             if result:
                 emit("success", f"Found {step.template} — THEN")
+                # #region agent log
+                _agent_dbg(
+                    "H5",
+                    "engine.py:if_found",
+                    "if_found THEN",
+                    {
+                        "template": step.template,
+                        "center": list(result.center),
+                        "region_pct": step.region_pct or None,
+                        "runId": "post-fix",
+                    },
+                )
+                # #endregion
                 if not _run_steps(step.then_steps, dev, emit, stop_flag):
                     return False
             else:
                 emit("warn", f"Not found {step.template} — ELSE")
+                # #region agent log
+                _agent_dbg(
+                    "H5",
+                    "engine.py:if_found",
+                    "if_found ELSE",
+                    {
+                        "template": step.template,
+                        "region_pct": step.region_pct or None,
+                        "runId": "post-fix",
+                    },
+                )
+                # #endregion
                 if not _run_steps(step.else_steps, dev, emit, stop_flag):
                     return False
 
@@ -195,7 +284,11 @@ def _run_steps(steps: list[Step], dev: BaseDevice, emit: LogCallback, stop_flag:
                     break
                 iteration += 1
                 img = dev.screencap()
-                result = find_template(img, step.template, step.confidence, ignore_badge=step.ignore_badge)
+                result = find_template(
+                    img, step.template, step.confidence,
+                    ignore_badge=step.ignore_badge,
+                    region_pct=step.region_pct or None,
+                )
                 if result:
                     emit("success", f"{label} — found after {iteration} checks")
                     if step.then_steps:
@@ -211,8 +304,16 @@ def _run_steps(steps: list[Step], dev: BaseDevice, emit: LogCallback, stop_flag:
                 return False
 
         elif step.action == "loop_until_text":
-            label = step.description or f"Wait for text '{step.text}'"
+            expect = step.text_pattern or step.text
+            label = step.description or (
+                f"Wait for pattern /{step.text_pattern}/"
+                if step.text_pattern
+                else f"Wait for text '{step.text}'"
+            )
             region = step.region_pct or [0.55, 0.0, 1.0, 0.10]
+            if not expect:
+                emit("error", f"{label} — need text or text_pattern")
+                return False
             iteration = 0
             found = False
             while True:
@@ -224,10 +325,14 @@ def _run_steps(steps: list[Step], dev: BaseDevice, emit: LogCallback, stop_flag:
                 img = dev.screencap()
                 try:
                     raw = read_text(img, region)
+                    matched = (
+                        text_matches_pattern(raw, step.text_pattern)
+                        if step.text_pattern
+                        else text_matches(raw, step.text)
+                    )
                 except (RuntimeError, ValueError) as e:
                     emit("error", str(e))
                     return False
-                matched = text_matches(raw, step.text)
                 if matched:
                     emit("success", f"{label} — matched '{raw.strip()}' after {iteration} checks")
                     if step.then_steps:
@@ -279,6 +384,14 @@ def _run_steps(steps: list[Step], dev: BaseDevice, emit: LogCallback, stop_flag:
 
         elif step.action == "tap":
             emit("info", f"Tap ({step.x}, {step.y})")
+            # #region agent log
+            _agent_dbg(
+                "H4",
+                "engine.py:tap",
+                "fixed coordinate tap",
+                {"x": step.x, "y": step.y, "desc": step.description},
+            )
+            # #endregion
             dev.tap(step.x, step.y)
 
         elif step.action == "swipe":
@@ -330,9 +443,43 @@ def _find_with_retry(dev: BaseDevice, step: Step, emit) -> tuple[tuple[int, int]
     for attempt in range(step.retries):
         img = dev.screencap()
         result, score = probe_template(
-            img, step.template, step.confidence, ignore_badge=step.ignore_badge
+            img, step.template, step.confidence,
+            ignore_badge=step.ignore_badge,
+            region_pct=step.region_pct or None,
         )
         best_score = max(best_score, score)
+        # #region agent log
+        if step.template and "magnifier" in step.template:
+            try:
+                sh, sw = img.shape[:2]
+                g_center = list(result.center) if result else None
+                zone = None
+                if g_center:
+                    cx, cy = g_center
+                    zone = (
+                        "LEFT_HUD" if cx < sw * 0.18 and cy > sh * 0.55
+                        else "MAP_FLOOR" if sw * 0.15 < cx < sw * 0.85 and sh * 0.2 < cy < sh * 0.85
+                        else "OTHER"
+                    )
+                _agent_dbg(
+                    "H1",
+                    "engine.py:_find_with_retry",
+                    "magnifier probe compare",
+                    {
+                        "attempt": attempt,
+                        "runId": "post-fix",
+                        "score": round(float(score), 4),
+                        "center": g_center,
+                        "zone": zone,
+                        "region_pct": step.region_pct or None,
+                        "threshold": step.confidence,
+                        "accepted": bool(result),
+                        "screen": [sw, sh],
+                    },
+                )
+            except Exception as e:
+                _agent_dbg("H1", "engine.py:_find_with_retry", "magnifier probe error", {"err": str(e)})
+        # #endregion
         if result:
             return result.center, score
         if attempt < step.retries - 1:

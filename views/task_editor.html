@@ -134,7 +134,7 @@ function getFieldsHTML(action, data) {
   if (action === 'loop_until_found')
     return `${makeTemplateSelect(data.template||'')} ${loopFields(data)} <label class="step-optional-label"><input type="checkbox" class="step-ignore-badge" ${data.ignore_badge?'checked':''}> Ignore badge</label>`;
   if (action === 'loop_until_text')
-    return `<input type="text" class="step-text" value="${data.text||''}" placeholder="1/6" style="width:70px"> ${regionPctFields(data)} ${loopFields(data)}`;
+    return `<input type="text" class="step-text" value="${data.text||''}" placeholder="1/6" style="width:70px" title="Exact text"> <input type="text" class="step-text-pattern" value="${data.text_pattern||''}" placeholder="[12]/6" style="width:90px" title="Regex pattern (overrides text)"> ${regionPctFields(data)} ${loopFields(data)}`;
   if (action === 'loop_templates')
     return `${loopFields(data)} <label class="step-optional-label"><input type="checkbox" class="step-ignore-badge" ${data.ignore_badge?'checked':''}> Ignore badge</label>${makeTemplateCheckboxes(data.templates)}`;
   if (action === 'wait')
@@ -261,6 +261,8 @@ function collectSteps(container) {
       if (branches) step.then = collectSteps(branches.querySelector('.then-block .branch-steps'));
     } else if (action === 'loop_until_text') {
       step.text = row.querySelector('.step-text')?.value || '';
+      const pat = row.querySelector('.step-text-pattern')?.value || '';
+      if (pat) step.text_pattern = pat;
       step.region_pct = [
         parseFloat(row.querySelector('.step-rp-l')?.value || 0.55),
         parseFloat(row.querySelector('.step-rp-t')?.value || 0),
@@ -336,6 +338,7 @@ function stepToData(step) {
   if (step.task_file) d.task_file = step.task_file;
   if (step.templates && step.templates.length) d.templates = step.templates;
   if (step.text) d.text = step.text;
+  if (step.text_pattern) d.text_pattern = step.text_pattern;
   if (step.region_pct && step.region_pct.length) d.region_pct = step.region_pct;
   if (step.max_loops) d.max_loops = step.max_loops;
   if (step.loop_delay !== undefined && step.loop_delay !== 1) d.loop_delay = step.loop_delay;

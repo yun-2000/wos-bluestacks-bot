@@ -1,43 +1,41 @@
-# wos-bluestacks-bot
+# WOS Bot
 
-Whiteout Survival automation for **BlueStacks on macOS**, with a visual task builder.
+Visual automation bot for **Whiteout Survival** with a task builder GUI.
 
-Forked from [austxio/WOS-Bot](https://github.com/austxio/WOS-Bot). Tuned for Mac + BlueStacks window capture, with a built-in **Hold Rally** loop gated by OCR (Marching `1/6`).
+Build custom automation tasks using a drag-and-drop step editor, template matching with OpenCV, and a live execution log — no coding required.
 
-## What's included
+## Features
 
-- **Hold Rally** — Search target → hold rally → select hun → deploy; waits until Marching shows `1/6` before the next cycle
-- **Window Capture** — BlueStacks / Quartz on macOS (also Google Play Games on Windows)
-- **ADB Support** — Physical Android devices or emulators
-- **Task Builder GUI** — Drag-and-drop steps, no coding required
-- **Template Matching** — Crop UI elements as OpenCV templates
-- **OCR Gate** — `loop_until_text` via Tesseract (e.g. wait for `1/6`)
-- **Conditional Logic** — `if_found` / `else`, `loop`, `loop_until_found`, `loop_templates`
-- **Live Log** — WebSocket real-time execution log
+- **Window Capture** — Works directly with Google Play Games on PC (no ADB/root needed)
+- **ADB Support** — Also works with Android phones over ADB
+- **Task Builder GUI** — Create, edit, and reorder automation steps visually
+- **Template Matching** — Screenshot cropping tool to capture UI elements as templates
+- **Smart Matching** — Ignore notification badges, adjustable confidence threshold
+- **Conditional Logic** — `if_found` / `else` branching, `loop`, `loop_until_found`, `loop_until_text`, `loop_templates`
+- **OCR Gate** — Wait until on-screen text matches (exact or regex `text_pattern`, e.g. `[12]/6`) via Tesseract
+- **Sub-tasks** — Run reusable task files from within other tasks
+- **Live Log** — WebSocket-powered real-time execution log
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/yun-2000/wos-bluestacks-bot.git && cd wos-bluestacks-bot
+git clone https://github.com/austxio/WOS-Bot.git && cd WOS-Bot
 pip install -r requirements.txt
+pip install pyautogui pygetwindow
 # OCR (loop_until_text) needs system Tesseract:
 #   macOS: brew install tesseract
-#   Windows: https://github.com/UB-Mannheim/tesseract/wiki
+#   Windows: install from https://github.com/UB-Mannheim/tesseract/wiki
 python app.py
 ```
 
 Open **http://localhost:8000** in your browser.
 
-1. Open Whiteout Survival in BlueStacks (auto-detected on Mac) or connect via ADB
-2. Run the **Hold Rally** task, or build your own in the Task Builder
-3. Watch the live execution log
+## How It Works
 
-## Bundled tasks
-
-| File | Purpose |
-|------|---------|
-| `tasks/hold_rally.yaml` | Main Hold Rally loop (OCR gate on Marching `1/6`) |
-| `tasks/_select_hun_and_deploy.yaml` | Sub-task: pick hun formation and deploy |
+1. **Connect** — Open Whiteout Survival in Google Play Games (auto-detected) or connect an Android device via ADB
+2. **Capture Templates** — Go to Templates tab, take a screenshot, crop buttons/icons you want the bot to find
+3. **Build Tasks** — Create tasks with steps like `find_and_tap`, `wait`, `if_found`, `loop_templates`
+4. **Run** — Hit ▶ Run and watch the execution log
 
 ## Task Actions
 
@@ -53,7 +51,7 @@ Open **http://localhost:8000** in your browser.
 | `run_task` | Execute another task file as sub-task |
 | `loop` | Repeat steps N times or until stopped |
 | `loop_until_found` | Keep checking until template appears |
-| `loop_until_text` | Keep checking until OCR reads expected text in a region |
+| `loop_until_text` | Keep checking until OCR matches `text` or regex `text_pattern` in a region |
 | `loop_templates` | Cycle through multiple templates, tap any found |
 | `verify` | Assert template is visible |
 | `screenshot` | Save debug screenshot |
@@ -80,27 +78,47 @@ steps:
     else:
       - action: tap_back
 
-  - action: loop_until_text
-    text: "1/6"
-    region_pct: [0.0, 0.13, 0.40, 0.20]
-    max_loops: 0
-    loop_delay: 2
+  - action: loop_templates
+    templates:
+      - claim_button.png
+      - collect_button.png
+    max_loops: 5
+    loop_delay: 1
 
   - action: run_task
     task_file: go_home.yaml
 ```
 
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | Dashboard |
+| `GET` | `/devices` | List connected devices |
+| `POST` | `/device` | Set active device |
+| `POST` | `/device/connect-gpg` | Connect ADB to GPG emulator |
+| `POST` | `/tasks/{file}/run` | Run a task |
+| `POST` | `/tasks/stop` | Stop running task |
+| `POST` | `/tasks/create` | Create new task |
+| `POST` | `/tasks/{file}/save` | Update task |
+| `DELETE` | `/tasks/{file}` | Delete task |
+| `POST` | `/screenshot` | Capture screenshot (base64) |
+| `POST` | `/template/crop` | Crop template from screenshot |
+| `POST` | `/template/upload` | Upload template image |
+| `DELETE` | `/template/{name}` | Delete template |
+| `WS` | `/ws/logs` | Real-time execution logs |
+
 ## Project Structure
 
 ```
-wos-bluestacks-bot/
+WOS-Bot/
 ├── app.py           # FastAPI server + API routes
 ├── device.py        # WindowDevice / ADBDevice abstraction
 ├── engine.py        # Task loader + step executor
 ├── vision.py        # OpenCV template matching + Tesseract OCR
 ├── views/           # Jinja2 HTML templates
 ├── static/          # CSS
-├── tasks/           # YAML task definitions (Hold Rally, …)
+├── tasks/           # YAML task definitions
 ├── templates/       # Template images for matching
 └── screenshots/     # Captured screenshots
 ```
@@ -108,10 +126,12 @@ wos-bluestacks-bot/
 ## Device Modes
 
 ### Window mode (default)
-Captures the game window via Quartz on macOS (BlueStacks) or Win32 on Windows (Google Play Games). Clicks via `pyautogui`. No ADB required.
+Captures the game window directly via Win32 API. Clicks via `pyautogui`. No ADB or root required. Works with Google Play Games on Windows.
 
-### ADB mode
+### ADB mode (required on macOS)
 Connects to a physical Android device or emulator via `adb`. Supports remote devices (`adb connect host:port`).
+
+On macOS, input is **pure ADB only** (no screen-coordinate / Quartz click fallback). BlueStacks may be minimized or hidden while the bot runs, as long as the emulator process stays alive and ADB remains connected (typically `adb connect 127.0.0.1:5555`). If the shell drops, the bot reconnects automatically and probes common local ports.
 
 ## Tips
 
@@ -119,12 +139,14 @@ Connects to a physical Android device or emulator via `adb`. Supports remote dev
 - Use `ignore_badge: true` for buttons with changing notification numbers
 - Use `confidence: 0.7` for fuzzy matches, `0.9` for exact matches
 - Crop templates tightly around the target element for best results
-- For Hold Rally, tune `region_pct` on the Marching bar if OCR misreads
+- Use `loop_templates` to scan and tap multiple buttons in one pass
+- On Mac: keep BlueStacks running; minimize/hide is OK — do not quit the app or lock the Mac if ADB would sleep
 
 ## Requirements
 
 - Python 3.12+
-- macOS (BlueStacks / Quartz) or Windows (Google Play Games)
+- Windows (for Google Play Games window capture) or macOS (BlueStacks via ADB)
+- Google Play Games or Android device / BlueStacks with ADB enabled
 - Tesseract OCR (`brew install tesseract` on macOS) for `loop_until_text`
 
 ## License
@@ -133,4 +155,4 @@ MIT
 
 ---
 
-Based on [WOS-Bot](https://github.com/austxio/WOS-Bot) by [Augustinus](https://github.com/austxio). Maintained at [yun-2000/wos-bluestacks-bot](https://github.com/yun-2000/wos-bluestacks-bot).
+Made by [Augustinus](https://github.com/austxio)

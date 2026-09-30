@@ -1,5 +1,5 @@
 name: Hold Rally
-description: Search target, hold rally, select hun, deploy, then repeat when Marching is 1/6
+description: Search target, hold rally, select hun, deploy, then repeat when Marching is 1/6 or 2/6
 icon: gift
 steps:
   - action: loop
@@ -7,14 +7,14 @@ steps:
     max_loops: 0
     loop_delay: 0
     then:
-      # Gate: only open a rally when top-right Marching shows 1/6
+      # Gate: only open a rally when Marching shows 1/6 or 2/6
       - action: loop_until_text
-        text: "1/6"
+        text_pattern: "[12345]/6"
         # Marching bar is left-side below top HUD (not top-right resources)
         region_pct: [0.0, 0.13, 0.40, 0.20]
         max_loops: 0
         loop_delay: 2
-        description: Wait until Marching is 1/6
+        description: Wait until Marching is 1/6 or 2/6
 
       # --- Already on Hold a rally dialog? ---
       - action: if_found
@@ -66,22 +66,27 @@ steps:
                     confidence: 0.72
                     retries: 5
                 else:
-                  # Magnifier button is semi-transparent — map bg changes kill high thresholds.
-                  - action: find_and_tap
-                    template: magnifier.jpg
-                    confidence: 0.55
-                    retries: 8
-                    retry_delay: 0.4
-                    optional: true
+                  # Open search panel via left-HUD magnifier (ROI avoids map false-matches).
+                  # Do NOT re-tap fixed coords after a successful magnifier tap — when the
+                  # panel is open, (67,1312) lands on the Beasts category icon.
                   - action: if_found
-                    template: search_btn.jpg
-                    confidence: 0.70
-                    then: []
+                    template: magnifier.jpg
+                    confidence: 0.72
+                    region_pct: [0.0, 0.55, 0.20, 0.85]
+                    then:
+                      - action: find_and_tap
+                        template: magnifier.jpg
+                        confidence: 0.72
+                        region_pct: [0.0, 0.55, 0.20, 0.85]
+                        retries: 5
+                        retry_delay: 0.3
+                      - action: wait
+                        seconds: 0.8
                     else:
-                      # Fallback: fixed world-map magnifier coords (stable across runs)
                       - action: tap
                         x: 67
                         y: 1312
+                        description: Magnifier fallback (panel closed only)
                       - action: wait
                         seconds: 0.8
                   - action: find_and_tap

@@ -119,6 +119,7 @@ classDiagram
         -serial: str
         -adb: str
         -_run(args) str
+        -_recover_connection()
         +screencap() bytes
         +tap(x, y)
         +swipe(x1, y1, x2, y2, duration_ms)

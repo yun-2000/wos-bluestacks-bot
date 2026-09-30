@@ -2,7 +2,6 @@ import subprocess
 import shutil
 import sys
 import time
-from pathlib import Path
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 
@@ -13,7 +12,6 @@ ADB_PATH = shutil.which("adb") or r"C:\Users\xalch\AppData\Local\Android\Sdk\pla
 GPG_PORT = 6520
 
 IS_WINDOWS = sys.platform == "win32"
-IS_MAC = sys.platform == "darwin"
 
 if IS_WINDOWS:
     import ctypes
@@ -36,285 +34,6 @@ else:
     gdi32 = None
     BITMAPINFOHEADER = None
 
-
-def _mac_bluestacks_window_candidates() -> list[dict]:
-    """All plausible BlueStacks game viewports (points), largest first."""
-    import Quartz
-    wins = Quartz.CGWindowListCopyWindowInfo(
-        Quartz.kCGWindowListOptionAll, Quartz.kCGNullWindowID
-    )
-    candidates = []
-    seen = set()
-    for w in wins:
-        owner = w.get("kCGWindowOwnerName") or ""
-        if "BlueStacks" not in owner:
-            continue
-        b = w.get("kCGWindowBounds") or {}
-        width = float(b.get("Width", 0))
-        height = float(b.get("Height", 0))
-        area = width * height
-        if width < 200 or height < 300 or area < 80_000:
-            continue
-        # Skip thin title/tool bars
-        if height < 200 or width / max(height, 1) > 8:
-            continue
-        key = (round(b.get("X", 0)), round(b.get("Y", 0)), round(width), round(height))
-        if key in seen:
-            continue
-        seen.add(key)
-        aspect = width / height
-        # Prefer portrait phone-like embeds; still keep landscape fullscreen hosts.
-        portrait_bonus = 1.0 if 0.40 <= aspect <= 0.75 else 0.0
-        # Prefer not-the-entire-desktop chrome when a smaller game pane exists
-        desktop_penalty = 0.3 if width >= 1200 and height >= 700 else 1.0
-        score = area * portrait_bonus * desktop_penalty + area * 0.01
-        candidates.append((score, dict(b)))
-    candidates.sort(key=lambda t: t[0], reverse=True)
-    return [b for _, b in candidates]
-
-
-def _mac_bluestacks_bounds() -> dict:
-    """Best BlueStacks game window bounds (points).
-
-    BlueStacks Air often omits windows from OnScreenOnly listings, so we scan
-    all windows and pick a phone-like portrait frame (not the desktop-sized
-    backing surface).
-    """
-    candidates = _mac_bluestacks_window_candidates()
-    if not candidates:
-        raise RuntimeError(
-            "BlueStacks window not found for macOS click fallback — "
-            "bring BlueStacks to the front and un-minimize it"
-        )
-    return candidates[0]
-
-
-def _mac_pick_bounds_for_android(android: np.ndarray) -> tuple[dict, dict]:
-    """Choose the BlueStacks window that best matches the ADB framebuffer."""
-    global _MAC_CAL_CACHE
-    candidates = _mac_bluestacks_window_candidates()
-    if not candidates:
-        raise RuntimeError(
-            "BlueStacks window not found for macOS click fallback — "
-            "bring BlueStacks to the front and un-minimize it"
-        )
-
-    # Prefer portrait phone panes first (fullscreen host is a last resort).
-    def _rank(b: dict) -> tuple:
-        w, h = float(b["Width"]), float(b["Height"])
-        aspect = w / max(h, 1.0)
-        portrait = 0 if 0.40 <= aspect <= 0.75 else 1
-        return (portrait, -w * h)
-
-    candidates = sorted(candidates, key=_rank)
-
-    # Reuse a still-valid cache hit before probing every window.
-    if _MAC_CAL_CACHE and _MAC_CAL_CACHE.get("usable"):
-        key = _MAC_CAL_CACHE.get("key")
-        if key:
-            cached_bounds = {
-                "X": float(key[0]), "Y": float(key[1]),
-                "Width": float(key[2]), "Height": float(key[3]),
-            }
-            cal = _mac_calibrate(android, cached_bounds, force=True)
-            if cal.get("usable"):
-                return cached_bounds, cal
-
-    best_cal = None
-    best_bounds = candidates[0]
-    for bounds in candidates[:6]:
-        cal = _mac_calibrate(android, bounds, force=True)
-        if best_cal is None or cal["conf"] > best_cal["conf"]:
-            best_cal = cal
-            best_bounds = bounds
-        if cal.get("usable"):
-            _MAC_CAL_CACHE = cal
-            return bounds, cal
-
-    if best_cal and best_cal.get("usable"):
-        _MAC_CAL_CACHE = best_cal
-    else:
-        _MAC_CAL_CACHE = None
-    return best_bounds, best_cal or {"conf": 0.0, "usable": False, "retina": 2.0,
-                                     "embed_x": 0, "embed_y": 0, "embed_scale": 1.0}
-
-def _mac_android_to_screen(ax: int, ay: int, aw: int, ah: int, bounds: dict) -> tuple[float, float]:
-    """Naive letterbox mapping (fallback when calibration unavailable)."""
-    wx, wy = float(bounds["X"]), float(bounds["Y"])
-    ww, wh = float(bounds["Width"]), float(bounds["Height"])
-    scale = min(ww / aw, wh / ah)
-    gw, gh = aw * scale, ah * scale
-    ox, oy = (ww - gw) / 2.0, (wh - gh) / 2.0
-    return wx + ox + ax * scale, wy + oy + ay * scale
-
-
-_MAC_CAL_CACHE: dict | None = None
-
-
-def _mac_capture_window(bounds: dict) -> tuple[np.ndarray, float]:
-    """Capture BlueStacks window pixels and return (BGR image, retina scale)."""
-    import Quartz
-    wins = Quartz.CGWindowListCopyWindowInfo(
-        Quartz.kCGWindowListOptionAll, Quartz.kCGNullWindowID
-    )
-    win_id = Quartz.kCGNullWindowID
-    for w in wins:
-        if (w.get("kCGWindowOwnerName") or "") != "BlueStacks":
-            continue
-        b = w.get("kCGWindowBounds") or {}
-        if (
-            abs(float(b.get("X", 0)) - bounds["X"]) < 2
-            and abs(float(b.get("Width", 0)) - bounds["Width"]) < 2
-            and float(b.get("Height", 0)) > 300
-        ):
-            win_id = int(w.get("kCGWindowNumber"))
-            break
-
-    rect = Quartz.CGRectMake(bounds["X"], bounds["Y"], bounds["Width"], bounds["Height"])
-    image = Quartz.CGWindowListCreateImage(
-        rect,
-        Quartz.kCGWindowListOptionIncludingWindow,
-        win_id,
-        Quartz.kCGWindowImageBoundsIgnoreFraming,
-    )
-    if image is None:
-        image = Quartz.CGWindowListCreateImage(
-            rect,
-            Quartz.kCGWindowListOptionOnScreenOnly,
-            Quartz.kCGNullWindowID,
-            Quartz.kCGWindowImageDefault,
-        )
-    if image is None:
-        raise RuntimeError("Failed to capture BlueStacks window")
-
-    w = Quartz.CGImageGetWidth(image)
-    h = Quartz.CGImageGetHeight(image)
-    bytes_per_row = Quartz.CGImageGetBytesPerRow(image)
-    data = Quartz.CGDataProviderCopyData(Quartz.CGImageGetDataProvider(image))
-    buf = np.frombuffer(data, dtype=np.uint8)
-    arr = buf.reshape((h, bytes_per_row // 4, 4))[:, :w, :]
-    bgr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
-    retina = w / float(bounds["Width"])
-    return bgr, retina
-
-
-def _mac_calibrate(android: np.ndarray, bounds: dict, *, force: bool = False) -> dict:
-    """Find where the Android framebuffer sits inside the BlueStacks window."""
-    global _MAC_CAL_CACHE
-    ah, aw = android.shape[:2]
-    key = (round(bounds["X"]), round(bounds["Y"]), round(bounds["Width"]), round(bounds["Height"]), aw, ah)
-    if not force and _MAC_CAL_CACHE and _MAC_CAL_CACHE.get("key") == key:
-        return _MAC_CAL_CACHE
-
-    win_img, retina = _mac_capture_window(bounds)
-    wh, ww = win_img.shape[:2]
-    best = (0.0, 0, 0, 0.0)
-    # BlueStacks Air often embeds the Android framebuffer at ~0.65–0.75 of
-    # window pixels; a 0.55 cap previously missed the true scale (~0.68) and
-    # fell back to letterbox (embed_y=0), causing taps to land above thin buttons.
-    for s in np.linspace(0.25, 0.99, 75):
-        tw, th = int(aw * s), int(ah * s)
-        if tw < 40 or th < 40 or tw >= ww or th >= wh:
-            continue
-        small = cv2.resize(android, (tw, th))
-        result = cv2.matchTemplate(win_img, small, cv2.TM_CCOEFF_NORMED)
-        _, mv, _, ml = cv2.minMaxLoc(result)
-        if mv > best[0]:
-            best = (float(mv), int(ml[0]), int(ml[1]), float(s))
-
-    conf, ex, ey, es = best
-    usable = conf >= 0.50
-    if not usable:
-        # Do NOT letterbox-tap: wrong embed_y pans the game map when clicks miss UI.
-        # Leave embed values present for logging only; caller must fall back to ADB.
-        scale = min(ww / aw, wh / ah)
-        es = scale
-        ex = int((ww - aw * scale) / 2)
-        ey = int((wh - ah * scale) / 2)
-
-    cal = {
-        "key": key,
-        "embed_x": ex,
-        "embed_y": ey,
-        "embed_scale": es,
-        "retina": retina,
-        "conf": conf,
-        "usable": usable,
-    }
-    # Only cache good calibrations — caching letterbox made every later tap miss.
-    if usable:
-        _MAC_CAL_CACHE = cal
-    else:
-        _MAC_CAL_CACHE = None
-    return cal
-
-
-def _mac_android_to_screen_calibrated(
-    ax: int, ay: int, android: np.ndarray, bounds: dict, *, force: bool = False
-) -> tuple[float, float, dict]:
-    cal = _mac_calibrate(android, bounds, force=force)
-    px = cal["embed_x"] + ax * cal["embed_scale"]
-    py = cal["embed_y"] + ay * cal["embed_scale"]
-    sx = float(bounds["X"]) + px / cal["retina"]
-    sy = float(bounds["Y"]) + py / cal["retina"]
-    return sx, sy, cal
-
-
-def _mac_click(x: float, y: float):
-    import Quartz
-    from Quartz import (
-        CGEventCreateMouseEvent, CGEventPost, CGPointMake,
-        kCGEventMouseMoved, kCGEventLeftMouseDown, kCGEventLeftMouseUp,
-        kCGMouseButtonLeft, kCGHIDEventTap,
-    )
-    subprocess.run(
-        ["osascript", "-e", 'tell application "BlueStacks" to activate'],
-        capture_output=True, timeout=5,
-    )
-    time.sleep(0.15)
-    for etype in (kCGEventMouseMoved, kCGEventLeftMouseDown, kCGEventLeftMouseUp):
-        ev = CGEventCreateMouseEvent(None, etype, CGPointMake(x, y), kCGMouseButtonLeft)
-        CGEventPost(kCGHIDEventTap, ev)
-        time.sleep(0.04)
-
-
-def _mac_drag(x1: float, y1: float, x2: float, y2: float, duration_ms: int = 300):
-    import Quartz
-    from Quartz import (
-        CGEventCreateMouseEvent, CGEventPost, CGPointMake,
-        kCGEventMouseMoved, kCGEventLeftMouseDown, kCGEventLeftMouseDragged,
-        kCGEventLeftMouseUp, kCGMouseButtonLeft, kCGHIDEventTap,
-    )
-    subprocess.run(
-        ["osascript", "-e", 'tell application "BlueStacks" to activate'],
-        capture_output=True, timeout=5,
-    )
-    time.sleep(0.1)
-    CGEventPost(kCGHIDEventTap, CGEventCreateMouseEvent(None, kCGEventMouseMoved, CGPointMake(x1, y1), kCGMouseButtonLeft))
-    CGEventPost(kCGHIDEventTap, CGEventCreateMouseEvent(None, kCGEventLeftMouseDown, CGPointMake(x1, y1), kCGMouseButtonLeft))
-    steps = max(5, duration_ms // 20)
-    for i in range(1, steps + 1):
-        frac = i / steps
-        ix = x1 + (x2 - x1) * frac
-        iy = y1 + (y2 - y1) * frac
-        CGEventPost(kCGHIDEventTap, CGEventCreateMouseEvent(None, kCGEventLeftMouseDragged, CGPointMake(ix, iy), kCGMouseButtonLeft))
-        time.sleep(duration_ms / 1000 / steps)
-    CGEventPost(kCGHIDEventTap, CGEventCreateMouseEvent(None, kCGEventLeftMouseUp, CGPointMake(x2, y2), kCGMouseButtonLeft))
-
-
-def _mac_press_escape():
-    import Quartz
-    from Quartz import CGEventCreateKeyboardEvent, CGEventPost, kCGHIDEventTap
-    subprocess.run(
-        ["osascript", "-e", 'tell application "BlueStacks" to activate'],
-        capture_output=True, timeout=5,
-    )
-    time.sleep(0.1)
-    # 53 = Escape
-    down = CGEventCreateKeyboardEvent(None, 53, True)
-    up = CGEventCreateKeyboardEvent(None, 53, False)
-    CGEventPost(kCGHIDEventTap, down)
-    CGEventPost(kCGHIDEventTap, up)
 
 @dataclass
 class DeviceInfo:
@@ -464,13 +183,38 @@ class WindowDevice(BaseDevice):
 
 
 class ADBDevice(BaseDevice):
+    """Pure ADB device — no Mac/Win screen-coordinate click fallback.
+
+    Screenshot and input go through `adb` only, so BlueStacks may be minimized
+    or hidden as long as the emulator process stays running and ADB stays up.
+    """
+
+    # Common local ADB endpoints (BlueStacks / GPG) tried during reconnect.
+    _LOCAL_ADB_PORTS = (5555, 5556, 5565, 5575, 5585, 6520)
+
     def __init__(self, serial: str, adb_path: str = ADB_PATH):
         self.serial = serial
         self.adb = adb_path
         self._screen_size: tuple[int, int] | None = None  # (w, h)
-        self._prefer_mac_input = False
 
-    def _run(self, args: list[str], raw: bool = False, retries: int = 3) -> bytes | str:
+    def _transient_adb_error(self, err: str) -> bool:
+        e = err.lower()
+        return any(
+            token in e
+            for token in (
+                "closed",
+                "offline",
+                "not found",
+                "device offline",
+                "connection reset",
+                "connection refused",
+                "no device",
+                "error: closed",
+                "cannot connect",
+            )
+        )
+
+    def _run(self, args: list[str], raw: bool = False, retries: int = 5) -> bytes | str:
         last_err = ""
         for attempt in range(retries):
             cmd = [self.adb, "-s", self.serial] + args
@@ -482,10 +226,9 @@ class ADBDevice(BaseDevice):
             if raw and r.stdout:
                 return r.stdout
 
-            closed = "closed" in last_err.lower() or "offline" in last_err.lower() or "not found" in last_err.lower()
-            if closed and attempt < retries - 1:
+            if self._transient_adb_error(last_err) and attempt < retries - 1:
                 self._recover_connection()
-                time.sleep(0.5 + attempt)
+                time.sleep(0.5 + attempt * 0.5)
                 continue
             if not raw:
                 raise RuntimeError(f"adb error: {last_err}")
@@ -494,69 +237,49 @@ class ADBDevice(BaseDevice):
             raise RuntimeError(f"adb error: {last_err}")
         return b""
 
+    def _device_ready(self, serial: str | None = None) -> bool:
+        target = serial or self.serial
+        r = subprocess.run(
+            [self.adb, "-s", target, "get-state"],
+            capture_output=True,
+            timeout=10,
+        )
+        return r.returncode == 0 and r.stdout.decode(errors="replace").strip() == "device"
+
     def _recover_connection(self):
-        """BlueStacks often drops shell while still listing as 'device'."""
+        """Re-establish ADB after BlueStacks drops the shell (common when backgrounded)."""
         if ":" in self.serial and not self.serial.startswith("emulator"):
             subprocess.run([self.adb, "disconnect", self.serial], capture_output=True, timeout=10)
             subprocess.run([self.adb, "connect", self.serial], capture_output=True, timeout=10)
+            if self._device_ready():
+                return
+            # Original host:port failed — probe common local emulator ports.
+            host = self.serial.rsplit(":", 1)[0]
+            for port in self._LOCAL_ADB_PORTS:
+                candidate = f"{host}:{port}"
+                if candidate == self.serial:
+                    continue
+                subprocess.run([self.adb, "connect", candidate], capture_output=True, timeout=10)
+                if self._device_ready(candidate):
+                    self.serial = candidate
+                    return
         else:
             subprocess.run([self.adb, "reconnect"], capture_output=True, timeout=10)
+            if self._device_ready():
+                return
+            # USB/emulator serial vanished — try TCP reconnect to localhost BlueStacks.
+            for port in self._LOCAL_ADB_PORTS:
+                candidate = f"127.0.0.1:{port}"
+                subprocess.run([self.adb, "connect", candidate], capture_output=True, timeout=10)
+                if self._device_ready(candidate):
+                    self.serial = candidate
+                    return
 
     def _ensure_screen_size(self):
         if self._screen_size is None:
             img = self.screencap()
             h, w = img.shape[:2]
             self._screen_size = (w, h)
-
-    def _mac_tap(self, x: int, y: int):
-        # Prefer a fresh frame for calibration so chrome/sidebar offsets stay accurate
-        android = self.screencap()
-        h, w = android.shape[:2]
-        self._screen_size = (w, h)
-        subprocess.run(
-            ["osascript", "-e", 'tell application "BlueStacks" to activate'],
-            capture_output=True, timeout=5,
-        )
-        time.sleep(0.35)
-        bounds, cal = _mac_pick_bounds_for_android(android)
-        sx = float(bounds["X"]) + (cal["embed_x"] + x * cal["embed_scale"]) / cal["retina"]
-        sy = float(bounds["Y"]) + (cal["embed_y"] + y * cal["embed_scale"]) / cal["retina"]
-        if not cal.get("usable"):
-            # Overlay (browser/video fullscreen) may be covering BlueStacks — retry once.
-            time.sleep(0.5)
-            android = self.screencap()
-            bounds, cal = _mac_pick_bounds_for_android(android)
-            sx = float(bounds["X"]) + (cal["embed_x"] + x * cal["embed_scale"]) / cal["retina"]
-            sy = float(bounds["Y"]) + (cal["embed_y"] + y * cal["embed_scale"]) / cal["retina"]
-        if not cal.get("usable"):
-            # Bad Mac mapping pans the wilderness map; use ADB instead.
-            self._prefer_mac_input = False
-            self._run(["shell", "input", "tap", str(x), str(y)], retries=2)
-            return
-        _mac_click(sx, sy)
-
-    def _mac_swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300):
-        android = self.screencap()
-        h, w = android.shape[:2]
-        self._screen_size = (w, h)
-        subprocess.run(
-            ["osascript", "-e", 'tell application "BlueStacks" to activate'],
-            capture_output=True, timeout=5,
-        )
-        time.sleep(0.35)
-        bounds, cal = _mac_pick_bounds_for_android(android)
-        if not cal.get("usable"):
-            self._prefer_mac_input = False
-            self._run([
-                "shell", "input", "swipe",
-                str(x1), str(y1), str(x2), str(y2), str(duration_ms),
-            ], retries=2)
-            return
-        s1x = float(bounds["X"]) + (cal["embed_x"] + x1 * cal["embed_scale"]) / cal["retina"]
-        s1y = float(bounds["Y"]) + (cal["embed_y"] + y1 * cal["embed_scale"]) / cal["retina"]
-        s2x = float(bounds["X"]) + (cal["embed_x"] + x2 * cal["embed_scale"]) / cal["retina"]
-        s2y = float(bounds["Y"]) + (cal["embed_y"] + y2 * cal["embed_scale"]) / cal["retina"]
-        _mac_drag(s1x, s1y, s2x, s2y, duration_ms)
 
     def screencap(self) -> np.ndarray:
         raw = self._run(["exec-out", "screencap", "-p"], raw=True)
@@ -569,46 +292,16 @@ class ADBDevice(BaseDevice):
         return img
 
     def tap(self, x: int, y: int):
-        if IS_MAC and self._prefer_mac_input:
-            self._mac_tap(x, y)
-            return
-        try:
-            self._run(["shell", "input", "tap", str(x), str(y)], retries=2)
-        except RuntimeError as e:
-            if IS_MAC and "closed" in str(e).lower():
-                self._prefer_mac_input = True
-                self._mac_tap(x, y)
-            else:
-                raise
+        self._run(["shell", "input", "tap", str(x), str(y)])
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300):
-        if IS_MAC and self._prefer_mac_input:
-            self._mac_swipe(x1, y1, x2, y2, duration_ms)
-            return
-        try:
-            self._run(
-                ["shell", "input", "swipe", str(x1), str(y1), str(x2), str(y2), str(duration_ms)],
-                retries=2,
-            )
-        except RuntimeError as e:
-            if IS_MAC and "closed" in str(e).lower():
-                self._prefer_mac_input = True
-                self._mac_swipe(x1, y1, x2, y2, duration_ms)
-            else:
-                raise
+        self._run([
+            "shell", "input", "swipe",
+            str(x1), str(y1), str(x2), str(y2), str(duration_ms),
+        ])
 
     def press_back(self):
-        if IS_MAC and self._prefer_mac_input:
-            _mac_press_escape()
-            return
-        try:
-            self._run(["shell", "input", "keyevent", "KEYCODE_BACK"], retries=2)
-        except RuntimeError as e:
-            if IS_MAC and "closed" in str(e).lower():
-                self._prefer_mac_input = True
-                _mac_press_escape()
-            else:
-                raise
+        self._run(["shell", "input", "keyevent", "KEYCODE_BACK"])
 
     def info(self) -> DeviceInfo:
         return DeviceInfo(id=self.serial, name=f"ADB: {self.serial}", type="adb", connected=True)
